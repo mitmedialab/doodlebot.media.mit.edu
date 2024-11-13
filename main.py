@@ -3,7 +3,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 import azure.cognitiveservices.speech as speechsdk
-import openai
 from openai import OpenAI
 import pyaudio
 import wave
@@ -47,11 +46,7 @@ class VoiceAssistant:
     def __init__(self):
         self.conversation_history = []
         self.temp_dir = tempfile.mkdtemp()
-        
-        # Initialize OpenAI client
         self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        
-        # Initialize Azure Speech config
         self.speech_config = speechsdk.SpeechConfig(
             subscription=azure_speech_key,
             region=azure_service_region
@@ -82,7 +77,6 @@ class VoiceAssistant:
                 data = stream.read(self.CHUNK)
                 frames.append(data)
             
-            # Save to temporary WAV file
             temp_path = os.path.join(self.temp_dir, "temp_recording.wav")
             wf = wave.open(temp_path, 'wb')
             wf.setnchannels(self.CHANNELS)
@@ -91,7 +85,6 @@ class VoiceAssistant:
             wf.writeframes(b''.join(frames))
             wf.close()
             
-            # Read the file as bytes
             with open(temp_path, 'rb') as audio_file:
                 audio_bytes = audio_file.read()
             
@@ -104,23 +97,18 @@ class VoiceAssistant:
 
     async def transcribe_audio(self, audio_bytes: bytes) -> str:
         """Convert speech to text using OpenAI Whisper"""
-        print("🔊 Transcribing audio...")
         try:
             response = self.openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=("audio.wav", audio_bytes),
             )
-            print("✅ Transcription complete!")
-            print(response.text + "\n")
             return response.text
         except Exception as e:
             raise VoiceAssistantError(f"Transcription failed: {str(e)}")
 
     async def get_chat_response(self, text: str) -> str:
         """Get response from ChatGPT"""
-        print("💬 Getting chat response...")
         try:
-            # Add user message to conversation history
             self.conversation_history.append({"role": "user", "content": text})
             
             response = self.openai_client.chat.completions.create(
@@ -130,10 +118,6 @@ class VoiceAssistant:
             )
             
             assistant_response = response.choices[0].message.content
-            print("✅ Chat response complete!")
-            print(assistant_response + "\n")
-            
-            # Add assistant response to conversation history
             self.conversation_history.append({"role": "assistant", "content": assistant_response})
             
             return assistant_response
@@ -154,7 +138,6 @@ class VoiceAssistant:
             result = synthesizer.speak_text_async(text).get()
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                print("✅ Speech synthesis complete!")
                 return output_path
             else:
                 raise VoiceAssistantError("Speech synthesis failed")
@@ -165,17 +148,11 @@ class VoiceAssistant:
     async def process_voice_input(self, audio_data: bytes = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
-            # Record audio if not provided
             if audio_data is None:
                 audio_data = await self.record_audio()
             
-            # Convert speech to text
             transcript = await self.transcribe_audio(audio_data)
-            
-            # Get ChatGPT response
             response_text = await self.get_chat_response(transcript)
-            
-            # Convert response to speech
             audio_path = await self.synthesize_speech(response_text)
             
             return response_text, audio_path
@@ -191,7 +168,6 @@ class VoiceAssistant:
         except Exception:
             pass
 
-# API Models
 class ChatResponse(BaseModel):
     text: str
     audio_path: str
@@ -209,19 +185,15 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
     try:
         audio_data = None
         if audio_file:
-            # Read uploaded file
             audio_data = await audio_file.read()
         
         response_text, audio_path = await assistant.process_voice_input(audio_data)
         
-        # Read the audio file into memory before cleanup
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
             
-        # Clean up files
         assistant.cleanup()
         
-        # Create a new temporary file for the response
         temp_response_path = tempfile.mktemp(suffix='.wav')
         with open(temp_response_path, 'wb') as f:
             f.write(audio_content)

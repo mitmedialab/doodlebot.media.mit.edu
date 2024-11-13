@@ -8,7 +8,7 @@ This FastAPI backend handles speech-to-text, natural language processing, and te
 ### File Structure
 ```
 .
-├── main.py           # Main application file
+├── main.py          # Main application file
 ├── test.py          # Test file generator
 ├── .env             # Environment variables
 └── README.md        # This file
