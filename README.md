@@ -1,7 +1,7 @@
-# Voice Assistant Implementation Plan
+# Voice Assistant Backend
 
 ## Overview
-A FastAPI-based voice assistant that handles speech-to-text, natural language processing, and text-to-speech conversion using OpenAI's Whisper, GPT models, and Azure's Speech Services.
+This FastAPI backend handles speech-to-text, natural language processing, and text-to-speech conversion using OpenAI's Whisper, GPT models, and Azure's Speech Services.
 
 ## Setup & Prerequisites
 
@@ -73,9 +73,3 @@ uvicorn main:app --reload
 ```bash
 python3 test.py
 ```
-
-## Contribution
-Feel free to submit issues and enhancement requests!
-
-## License
-MIT
