@@ -229,6 +229,7 @@ def try_mount_static_html(app, name: str, prefix: str = "/"):
     if os.path.exists(directory):
         app.mount(prefix, StaticFiles(
             directory=directory, html=True), name=name)
+        print(f"Mounted {name} at {prefix}")
     else:
         print(f"Directory not found: {directory}")
 
