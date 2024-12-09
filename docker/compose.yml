@@ -25,7 +25,7 @@ services:
       - "8000:80"
     volumes:
       - "./.frontend:/app/frontend"
-      - "./.playground:/app/playground"
+      - "./.playground:/app/frontend/playground"
     env_file:
       - path: ../.env
         required: false
