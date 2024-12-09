@@ -10,14 +10,26 @@ importers:
     dependencies:
       '@sveltejs/adapter-static':
         specifier: ^3.0.6
-        version: 3.0.6(@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3))
+        version: 3.0.6(@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))
+      events:
+        specifier: ^3.3.0
+        version: 3.3.0
+      microbit-web-bluetooth:
+        specifier: ^0.7.0
+        version: 0.7.0
     devDependencies:
       '@sveltejs/kit':
         specifier: ^2.9.0
-        version: 2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3)
+        version: 2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
       '@sveltejs/vite-plugin-svelte':
         specifier: ^5.0.0
-        version: 5.0.1(svelte@5.9.0)(vite@6.0.3)
+        version: 5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
+      '@types/events':
+        specifier: ^3.0.3
+        version: 3.0.3
+      '@types/web-bluetooth':
+        specifier: ^0.0.20
+        version: 0.0.20
       svelte:
         specifier: ^5.0.0
         version: 5.9.0
@@ -29,7 +41,7 @@ importers:
         version: 5.7.2
       vite:
         specifier: ^6.0.0
-        version: 6.0.3
+        version: 6.0.3(@types/node@20.17.9)
 
 packages:
 
@@ -332,6 +344,15 @@ packages:
   '@types/estree@1.0.6':
     resolution: {integrity: sha512-AYnb1nQyY49te+VRAVgmzfcgjYS91mY5P0TKUDCLEM+gNnA+3T6rWITXRLYCpahpqSQbN5cE+gHpnPyXjHWxcw==}
 
+  '@types/events@3.0.3':
+    resolution: {integrity: sha512-trOc4AAUThEz9hapPtSd7wf5tiQKvTtu5b371UxXdTuqzIh0ArcRspRP0i0Viu+LXstIQ1z96t1nsPxT9ol01g==}
+
+  '@types/node@20.17.9':
+    resolution: {integrity: sha512-0JOXkRyLanfGPE2QRCwgxhzlBAvaRdCNMcvbd7jFfpmD4eEXll7LRwy5ymJmyeZqk7Nh7eD2LeUyQ68BbndmXw==}
+
+  '@types/web-bluetooth@0.0.20':
+    resolution: {integrity: sha512-g9gZnnXVq7gM7v3tJCWV/qw7w+KeOlSHAhgF9RytFyifW6AF61hdT2ucrYhPq9hLs5JIryeupHV3qGk95dH9ow==}
+
   acorn-typescript@1.4.13:
     resolution: {integrity: sha512-xsc9Xv0xlVfwp2o7sQ+GCQ1PgbkdcpWdTzrwXxO3xDMTAywVS3oXVOcOHuRjAPkS4P9b+yc/qNF15460v+jp4Q==}
     peerDependencies:
@@ -385,6 +406,10 @@ packages:
   esrap@1.2.3:
     resolution: {integrity: sha512-ZlQmCCK+n7SGoqo7DnfKaP1sJZa49P01/dXzmjCASSo04p72w8EksT2NMK8CEX8DhKsfJXANioIw8VyHNsBfvQ==}
 
+  events@3.3.0:
+    resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
+    engines: {node: '>=0.8.x'}
+
   fdir@6.4.2:
     resolution: {integrity: sha512-KnhMXsKSPZlAhp7+IjUkRZKPb4fUyccpDrdFXbi4QL1qkmFh9kVY09Yox+n4MaOb3lHZ1Tv829C3oaaXoMYPDQ==}
     peerDependencies:
@@ -419,6 +444,10 @@ packages:
 
   magic-string@0.30.14:
     resolution: {integrity: sha512-5c99P1WKTed11ZC0HMJOj6CDIue6F8ySu+bJL+85q1zBEIY8IklrJ1eiKC2NDRh3Ct3FcvmJPyQHb9erXMTJNw==}
+
+  microbit-web-bluetooth@0.7.0:
+    resolution: {integrity: sha512-CvJnQZJb/QOQfpNHiMRrLP+Djtodn5kmHKMn0OhbwYWXpFwcSIOzbyK5Jfdv8xnqFG7n4YUtOJtR0WdE3ql6cQ==}
+    engines: {node: '>=10.16.0'}
 
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
@@ -490,6 +519,9 @@ packages:
     resolution: {integrity: sha512-i5t66RHxDvVN40HfDd1PsEThGNnlMCMT3jMUuoh9/0TaqWevNontacunWyN02LA9/fIbEWlcHZcgTKb9QoaLfg==}
     engines: {node: '>=14.17'}
     hasBin: true
+
+  undici-types@6.19.8:
+    resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
 
   vite@6.0.3:
     resolution: {integrity: sha512-Cmuo5P0ENTN6HxLSo6IHsjCLn/81Vgrp81oaiFFMRa8gGDj5xEjIcEpf2ZymZtZR8oU0P2JX5WuUp/rlXcHkAw==}
@@ -697,13 +729,13 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.28.1':
     optional: true
 
-  '@sveltejs/adapter-static@3.0.6(@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3))':
+  '@sveltejs/adapter-static@3.0.6(@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))':
     dependencies:
-      '@sveltejs/kit': 2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3)
+      '@sveltejs/kit': 2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
 
-  '@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3)':
+  '@sveltejs/kit@2.9.0(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))':
     dependencies:
-      '@sveltejs/vite-plugin-svelte': 5.0.1(svelte@5.9.0)(vite@6.0.3)
+      '@sveltejs/vite-plugin-svelte': 5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
       '@types/cookie': 0.6.0
       cookie: 0.6.0
       devalue: 5.1.1
@@ -717,33 +749,41 @@ snapshots:
       sirv: 3.0.0
       svelte: 5.9.0
       tiny-glob: 0.2.9
-      vite: 6.0.3
+      vite: 6.0.3(@types/node@20.17.9)
 
-  '@sveltejs/vite-plugin-svelte-inspector@4.0.1(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3)':
+  '@sveltejs/vite-plugin-svelte-inspector@4.0.1(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))':
     dependencies:
-      '@sveltejs/vite-plugin-svelte': 5.0.1(svelte@5.9.0)(vite@6.0.3)
+      '@sveltejs/vite-plugin-svelte': 5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
       debug: 4.4.0
       svelte: 5.9.0
-      vite: 6.0.3
+      vite: 6.0.3(@types/node@20.17.9)
     transitivePeerDependencies:
       - supports-color
 
-  '@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3)':
+  '@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))':
     dependencies:
-      '@sveltejs/vite-plugin-svelte-inspector': 4.0.1(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3))(svelte@5.9.0)(vite@6.0.3)
+      '@sveltejs/vite-plugin-svelte-inspector': 4.0.1(@sveltejs/vite-plugin-svelte@5.0.1(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9)))(svelte@5.9.0)(vite@6.0.3(@types/node@20.17.9))
       debug: 4.4.0
       deepmerge: 4.3.1
       kleur: 4.1.5
       magic-string: 0.30.14
       svelte: 5.9.0
-      vite: 6.0.3
-      vitefu: 1.0.4(vite@6.0.3)
+      vite: 6.0.3(@types/node@20.17.9)
+      vitefu: 1.0.4(vite@6.0.3(@types/node@20.17.9))
     transitivePeerDependencies:
       - supports-color
 
   '@types/cookie@0.6.0': {}
 
   '@types/estree@1.0.6': {}
+
+  '@types/events@3.0.3': {}
+
+  '@types/node@20.17.9':
+    dependencies:
+      undici-types: 6.19.8
+
+  '@types/web-bluetooth@0.0.20': {}
 
   acorn-typescript@1.4.13(acorn@8.14.0):
     dependencies:
@@ -803,6 +843,8 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.0
       '@types/estree': 1.0.6
 
+  events@3.3.0: {}
+
   fdir@6.4.2: {}
 
   fsevents@2.3.3:
@@ -825,6 +867,11 @@ snapshots:
   magic-string@0.30.14:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.0
+
+  microbit-web-bluetooth@0.7.0:
+    dependencies:
+      '@types/node': 20.17.9
+      '@types/web-bluetooth': 0.0.20
 
   mri@1.2.0: {}
 
@@ -920,16 +967,19 @@ snapshots:
 
   typescript@5.7.2: {}
 
-  vite@6.0.3:
+  undici-types@6.19.8: {}
+
+  vite@6.0.3(@types/node@20.17.9):
     dependencies:
       esbuild: 0.24.0
       postcss: 8.4.49
       rollup: 4.28.1
     optionalDependencies:
+      '@types/node': 20.17.9
       fsevents: 2.3.3
 
-  vitefu@1.0.4(vite@6.0.3):
+  vitefu@1.0.4(vite@6.0.3(@types/node@20.17.9)):
     optionalDependencies:
-      vite: 6.0.3
+      vite: 6.0.3(@types/node@20.17.9)
 
   zimmerframe@1.1.2: {}
