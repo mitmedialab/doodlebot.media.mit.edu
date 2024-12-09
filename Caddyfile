@@ -1,7 +1,7 @@
-http://doodlebot.media.mit.edu {
+doodlebot.media.mit.edu {
     reverse_proxy backend:80
 }
 
-https://doodlebot.media.mit.edu {
+http://doodlebot.media.mit.edu {
     reverse_proxy backend:80
 }
