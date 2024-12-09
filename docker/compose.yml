@@ -1,0 +1,48 @@
+services:
+  frontend:
+    container_name: doodlebot-frontend
+    volumes:
+      - ./.frontend:/dist
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend.Dockerfile # NOTE: path is relative to above context
+    restart: "no"
+
+  playground:
+    container_name: doodlebot-playground
+    volumes:
+      - ./.playground:/dist
+    build:
+      dockerfile: ./playground.Dockerfile
+    restart: "no"
+
+  backend:
+    container_name: doodlebot-backend
+    build:
+      context: ..
+      dockerfile: ./docker/backend.Dockerfile
+    ports:
+      - "8000:80"
+    volumes:
+      - "./.frontend:/app/frontend"
+      - "./.playground:/app/playground"
+    env_file:
+      - path: ../.env
+        required: false
+    networks:
+      - app-network
+
+  caddy:
+    container_name: doodlebot-caddy
+    image: caddy:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../Caddyfile:/etc/caddy/Caddyfile
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
