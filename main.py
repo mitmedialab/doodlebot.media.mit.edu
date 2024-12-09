@@ -233,8 +233,8 @@ def try_mount_static_html(app, name: str, prefix: str = "/"):
         print(f"Directory not found: {directory}")
 
 
-try_mount_static_html(app, "frontend")
 try_mount_static_html(app, "playground", "/playground")
+try_mount_static_html(app, "frontend")
 
 if __name__ == "__main__":
     import uvicorn
