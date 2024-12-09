@@ -10,4 +10,4 @@ COMPOSE_FILE="$DOCKER_DIR/compose.yml"
 
 docker compose -f "$COMPOSE_FILE" up --build frontend playground
 
-docker compose -f "$COMPOSE_FILE" up --build backend caddy
+docker compose -f "$COMPOSE_FILE" up --build --detach backend caddy
