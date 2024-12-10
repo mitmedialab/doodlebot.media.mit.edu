@@ -23,6 +23,7 @@ The steps make reference to shell scripts stored directly on the deployment mach
     - Use the `user_id` @pmalacho provided to you as well as the password when prompted
 2. Create a sudo session: `sudo su`
     - You'll again be prompted for your password
+3. Change directory to home: `cd`
 3. Pull the latest changes for this repo: `./pull.sh`
 4. (Re)start the docker containers: `./start.sh`
     - **NOTE:** If you deem it necessary, you can explicitly stop all currently running containers first: `./stop.sh`

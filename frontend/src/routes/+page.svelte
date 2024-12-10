@@ -11,13 +11,9 @@
 
     let popup: Window | null = null;
 
-    let password: string = localStorage.getItem("password") || "";
-    let ssid: string = localStorage.getItem("ssid") || "";
     let ip: string = localStorage.getItem("ip") || "";
     let playgroundURL: string = localStorage.getItem("playgroundURL") || "";
 
-    $: if (password) localStorage.setItem("password", password);
-    $: if (ssid) localStorage.setItem("ssid", ssid);
     $: if (ip) localStorage.setItem("ip", ip);
     $: if (playgroundURL) localStorage.setItem("playgroundURL", playgroundURL);
 
@@ -105,8 +101,6 @@
 
         // handle case if playgroundURL ends in question mark (?)
         const url = new URL(playgroundURL);
-        url.searchParams.set("password", password);
-        url.searchParams.set("ssid", ssid);
         url.searchParams.set("ip", ip);
 
         popup = window.open(url.toString());
@@ -129,16 +123,6 @@
         );
     };
 </script>
-
-<div class="row">
-    <label for="ssid">ssid:</label>
-    <input id="ssid" bind:value={ssid} class="fill" />
-</div>
-
-<div class="row">
-    <label for="password">password:</label>
-    <input id="password" bind:value={password} type="password" class="fill" />
-</div>
 
 <div class="row">
     <label for="ip">ip:</label>
