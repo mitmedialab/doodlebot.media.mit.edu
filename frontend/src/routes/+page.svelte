@@ -3,13 +3,25 @@
 
     const { bluetooth } = window.navigator;
 
-    const popupBaseURL = "http://doodlebot.media.mit.edu/playground";
+    const constants = {
+        handshakeMessage: "doodlebot",
+        disconnectMessage: "disconnected",
+        commandCompleteIdentifier: "done",
+    };
 
     let popup: Window | null = null;
 
-    let password: string;
-    let ssid: string;
-    let ip: string;
+    let password: string = localStorage.getItem("password") || "";
+    let ssid: string = localStorage.getItem("ssid") || "";
+    let ip: string = localStorage.getItem("ip") || "";
+    let playgroundURL: string = localStorage.getItem("playgroundURL") || "";
+
+    $: if (password) localStorage.setItem("password", password);
+    $: if (ssid) localStorage.setItem("ssid", ssid);
+    $: if (ip) localStorage.setItem("ip", ip);
+    $: if (playgroundURL) localStorage.setItem("playgroundURL", playgroundURL);
+
+    $: popupOrigin = popup ? new URL(playgroundURL).origin : "";
 
     let unsubscribers = new Array<() => void>();
 
@@ -18,10 +30,14 @@
         unsubscribers = [];
     };
 
-    const forwardToPopup = ({ detail }: Pick<CustomEvent<string>, "detail">) =>
-        popup?.postMessage(detail, popupBaseURL);
+    const forwardToPopup = ({
+        detail,
+    }: Pick<CustomEvent<string>, "detail">) => {
+        popup?.postMessage(detail, playgroundURL);
+    };
 
-    const disconnect = () => forwardToPopup({ detail: "disconnect" });
+    const disconnect = () =>
+        forwardToPopup({ detail: constants.disconnectMessage });
 
     const getUartService = async (
         service: BluetoothRemoteGATTService,
@@ -45,18 +61,19 @@
     const waitForPopupToRespond = () =>
         new Promise<void>((resolve) => {
             let interval = setInterval(
-                () => popup!.postMessage("check", popupBaseURL),
+                () =>
+                    popup!.postMessage(
+                        constants.handshakeMessage,
+                        playgroundURL,
+                    ),
                 100,
             );
 
             const onReady = (event: MessageEvent) => {
-                if (!event.origin.startsWith(popupBaseURL)) return;
-
-                if (event.data === "ready") {
-                    clearInterval(interval!);
-                    window.removeEventListener("message", onReady);
-                    resolve();
-                }
+                if (event.origin !== popupOrigin) return;
+                clearInterval(interval!);
+                window.removeEventListener("message", onReady);
+                resolve();
             };
 
             window.addEventListener("message", onReady);
@@ -86,18 +103,24 @@
 
         const uartService = await getUartService(found, device);
 
-        popup = window.open(
-            `${popupBaseURL}?password=${password}&ssid=${ssid}&ip=${ip}`,
-        );
+        // handle case if playgroundURL ends in question mark (?)
+        const url = new URL(playgroundURL);
+        url.searchParams.set("password", password);
+        url.searchParams.set("ssid", ssid);
+        url.searchParams.set("ip", ip);
+
+        popup = window.open(url.toString());
 
         if (!popup) return alert("Please allow popups for this website");
 
         await waitForPopupToRespond();
 
         const forwardToBLE = async ({ data, origin }: MessageEvent) => {
-            if (!origin.startsWith(popupBaseURL)) return;
+            if (origin !== popupOrigin) return;
             await uartService.sendText(data);
-            forwardToPopup({ detail: data });
+            forwardToPopup({
+                detail: data + constants.commandCompleteIdentifier,
+            });
         };
 
         window.addEventListener("message", forwardToBLE);
@@ -107,13 +130,39 @@
     };
 </script>
 
-<label for="ssid">ssid:</label>
-<input id="ssid" bind:value={ssid} />
+<div class="row">
+    <label for="ssid">ssid:</label>
+    <input id="ssid" bind:value={ssid} class="fill" />
+</div>
 
-<label for="password">password:</label>
-<input id="password" bind:value={password} />
+<div class="row">
+    <label for="password">password:</label>
+    <input id="password" bind:value={password} type="password" class="fill" />
+</div>
 
-<label for="ip">ip:</label>
-<input id="ip" bind:value={ip} />
+<div class="row">
+    <label for="ip">ip:</label>
+    <input id="ip" bind:value={ip} class="fill" />
+</div>
 
-<button on:click={connect}>Connect</button>
+<div class="row">
+    <label for="playgroundURL">playground URL:</label>
+    <input id="playgroundURL" bind:value={playgroundURL} class="fill" />
+</div>
+
+<div>
+    <button on:click={connect}>Connect</button>
+</div>
+
+<style>
+    .row {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .fill {
+        flex-grow: 1;
+    }
+</style>
