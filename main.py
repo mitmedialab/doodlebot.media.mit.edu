@@ -11,6 +11,7 @@ import tempfile
 import os
 from dotenv import load_dotenv
 from functools import wraps
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +21,13 @@ app = FastAPI(
     title="Voice Assistant API",
     description="A voice assistant that converts speech to text, processes it, and returns synthesized speech",
     version="1.0.0"
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # Initialize API clients
