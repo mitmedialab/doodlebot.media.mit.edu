@@ -144,7 +144,7 @@ class VoiceAssistant:
             output_path = os.path.join(self.temp_dir, "response.wav")
             audio_config = speechsdk.audio.AudioOutputConfig(
                 filename=output_path)
-            self.speech_config.speech_synthesis_voice_name = "en-US-AnaNeural"
+            self.speech_config.speech_synthesis_voice_name = "en-US-GuyNeural"
             synthesizer = speechsdk.SpeechSynthesizer(
                 speech_config=self.speech_config,
                 audio_config=audio_config
