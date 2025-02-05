@@ -62,7 +62,8 @@ class VoiceAssistant:
         self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.speech_config = speechsdk.SpeechConfig(
             subscription=azure_speech_key,
-            region=azure_service_region
+            region=azure_service_region,
+            speech_synthesis_voice_name="en-US-GuyNeural"
         )
 
         # Audio recording config
@@ -144,7 +145,6 @@ class VoiceAssistant:
             output_path = os.path.join(self.temp_dir, "response.wav")
             audio_config = speechsdk.audio.AudioOutputConfig(
                 filename=output_path)
-            self.speech_config.speech_synthesis_voice_name = "en-US-GuyNeural"
             synthesizer = speechsdk.SpeechSynthesizer(
                 speech_config=self.speech_config,
                 audio_config=audio_config
