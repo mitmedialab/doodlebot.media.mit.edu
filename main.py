@@ -62,9 +62,9 @@ class VoiceAssistant:
         self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.speech_config = speechsdk.SpeechConfig(
             subscription=azure_speech_key,
-            region=azure_service_region,
-            speech_synthesis_voice_name="en-US-GuyNeural"
+            region=azure_service_region
         )
+        self.speech_config.speech_synthesis_voice_name = "en-US-AnaNeural"
 
         # Audio recording config
         self.CHUNK = 1024
