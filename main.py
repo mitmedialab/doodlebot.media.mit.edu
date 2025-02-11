@@ -123,7 +123,12 @@ class VoiceAssistant:
     async def get_chat_response(self, text: str) -> str:
         """Get response from ChatGPT"""
         try:
-            self.conversation_history.append({"role": "user", "content": "start your response with hi student! " + text})
+            system_prompt = f"""You are a helpful teaching assistant in a classroom. You will be given a message from a student.
+            You will need to respond to the student's message in a way that is helpful and engaging. Please output at most 2 sentences.
+            Please start your response with "Hi student!"
+            """
+            self.conversation_history.append({"role": "system", "content": system_prompt})
+            self.conversation_history.append({"role": "user", "content": text})
 
             response = self.openai_client.chat.completions.create(
                 model="gpt-4",
