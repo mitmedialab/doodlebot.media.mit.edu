@@ -110,8 +110,13 @@
         await waitForPopupToRespond();
 
         const forwardToBLE = async ({ data, origin }: MessageEvent) => {
-            if (origin !== popupOrigin) return;
+            if (origin !== popupOrigin) {
+                console.log("origin mismatch", origin, popupOrigin);
+                return
+            };
             await uartService.sendText(data);
+            let text = data + constants.commandCompleteIdentifier;
+            console.log("forwarding to popup", text);
             forwardToPopup({
                 detail: data + constants.commandCompleteIdentifier,
             });
