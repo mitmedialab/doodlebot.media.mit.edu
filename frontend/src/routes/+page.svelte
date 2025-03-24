@@ -46,7 +46,10 @@
             uartService.removeEventListener("receiveText", forwardToPopup),
         );
 
-        device.addEventListener("gattserverdisconnected", disconnect);
+        device.addEventListener("gattserverdisconnected", () => {
+            console.log("gattserverdisconnected");
+            disconnect()
+        });
         unsubscribers.push(() =>
             device.removeEventListener("gattserverdisconnected", disconnect),
         );
@@ -65,8 +68,12 @@
                 100,
             );
 
+            console.log("waiting for pop-up");
+
             const onReady = (event: MessageEvent) => {
-                if (event.origin !== popupOrigin) return;
+                if (event.origin !== popupOrigin) {
+                    return;
+                }
                 clearInterval(interval!);
                 window.removeEventListener("message", onReady);
                 resolve();
