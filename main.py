@@ -224,6 +224,38 @@ class ChatResponse(BaseModel):
     audio_path: str
 
 
+class TextInput(BaseModel):
+    text: str
+
+
+@app.post("/speak")
+@handle_errors
+async def speak_endpoint(input_data: TextInput):
+    """Convert text to speech and return audio file"""
+    assistant = VoiceAssistant()
+    try:
+        audio_path = await assistant.synthesize_speech(input_data.text)
+
+        with open(audio_path, 'rb') as f:
+            audio_content = f.read()
+
+        assistant.cleanup()
+
+        temp_response_path = tempfile.mktemp(suffix='.wav')
+        with open(temp_response_path, 'wb') as f:
+            f.write(audio_content)
+
+        return FileResponse(
+            path=temp_response_path,
+            media_type="audio/wav",
+            filename="speech.wav"
+        )
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+
 @app.get("/health")
 async def root():
     """Health check endpoint"""
