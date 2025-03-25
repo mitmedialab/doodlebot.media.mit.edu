@@ -121,6 +121,7 @@
                 console.log("origin mismatch", origin, popupOrigin);
                 return
             };
+            console.log("sending data", data);
             await uartService.sendText(data);
             let text = data + constants.commandCompleteIdentifier;
             console.log("forwarding to popup", text);
