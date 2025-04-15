@@ -7,7 +7,7 @@ It works by executing a series of [docker containers](https://www.docker.com/res
 - **backend:** This container executes the FastAPI application defined in [main.py](./main.py). The FastAPI is also responsible for serving the static assets of the **frontend** and **playground** containers described below.
 - **frontend:** This container builds the [SvelteKit](https://svelte.dev/) web app defined in [frontend/](./frontend/) into a static website, which acts as the frontend you see when navigating to [doodlebot.media.mit.edu](https://doodlebot.media.mit.edu)
 - **playground:** This container pulls down a single deployed folder of the [RAISE Playground repo](https://github.com/mitmedialab/prg-raise-playground)
-    - Currently, it pulls down the deploy of the [curriculum branch](https://github.com/mitmedialab/prg-raise-playground/tree/curriculum), which is configured in [docker/playground.Dockerfile](./docker/playground.Dockerfile)
+    - Currently, it pulls down the deploy of the [doodlebot branch](https://github.com/mitmedialab/prg-raise-playground/tree/doodlebot), which is configured in [docker/playground.Dockerfile](./docker/playground.Dockerfile)
 - **caddy:** This container executes the [Caddy](https://caddyserver.com/) web server, which routes traffic to the **backend** container
 
 The activity of these containers is coordinated using [docker compose](https://docs.docker.com/compose/) as configured in [docker/compose.yml](./docker/compose.yml).

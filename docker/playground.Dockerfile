@@ -9,10 +9,10 @@ WORKDIR /playground
 RUN git clone --depth=1 --branch=gh-pages --filter=blob:none --sparse \
     https://github.com/mitmedialab/prg-raise-playground.git /playground
 
-# Enable sparse checkout and select only the "curriculum" directory.
-RUN git sparse-checkout set curriculum
+# Enable sparse checkout and select only the "doodlebot" directory.
+RUN git sparse-checkout set doodlebot
 
 # After setting sparse-checkout, "git checkout" will update the working copy to include only that folder.
 RUN git checkout
 
-CMD git pull && cp -r curriculum/* /dist
+CMD git pull && cp -r doodlebot/* /dist
