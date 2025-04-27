@@ -265,38 +265,37 @@ async def root():
 
 # Enhanced error handling
 async def fetch_video_stream(ip_address: str):
-    video_stream_url = f"http://{ip_address}:8000/video_feed"  # Ensure this URL is correct
+    # Construct the URL for the MJPEG feed
+    video_stream_url = f"http://{ip_address}:8000/video_feed"
 
     try:
-        async with httpx.AsyncClient(http2=False) as client:  # Disable HTTP2 here
+        async with httpx.AsyncClient() as client:
             async with client.get(video_stream_url, stream=True) as response:
+                # If the response is not OK, raise an exception
                 if response.status_code != 200:
-                    raise HTTPException(status_code=500, detail="Failed to fetch video stream.")
-                
-                # The MJPEG stream is delivered as multipart with boundaries
-                headers = {
-                    'Cache-Control': 'no-cache',
-                    'Content-Type': 'multipart/x-mixed-replace; boundary=frame',  # Set the correct content type
-                }
+                    raise Exception(f"Failed to fetch video stream, status code: {response.status_code}")
 
+                # Make sure to yield each chunk to maintain the streaming connection
                 async for chunk in response.aiter_bytes():
                     yield chunk
     except Exception as e:
         logging.error(f"Error fetching video stream: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching video stream.")
-
+        raise Exception(f"Error fetching video stream: {e}")
 
 @app.get("/proxy-video-stream")
 async def proxy_video_stream(ip_address: str):
     """
-    Proxy the video stream from an external URL and serve it to the client.
+    Proxy the MJPEG video stream from an external URL.
     The IP address is passed dynamically in the query parameter.
     """
     try:
-        return StreamingResponse(fetch_video_stream(ip_address), media_type="multipart/x-mixed-replace; boundary=frame")
+        return StreamingResponse(
+            fetch_video_stream(ip_address),
+            media_type="multipart/x-mixed-replace; boundary=frame"
+        )
     except Exception as e:
-        logging.error(f"Failed to serve video stream for IP {ip_address}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to serve video stream.")
+        logging.error(f"Error in proxy: {e}")
+        raise Exception(f"Error in proxy: {e}")
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
