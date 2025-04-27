@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 import httpx
+import logging
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -262,6 +263,7 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
+# Enhanced error handling
 async def fetch_video_stream(ip_address: str):
     video_stream_url = f"http://{ip_address}:8000/video_feed"
     
@@ -271,14 +273,18 @@ async def fetch_video_stream(ip_address: str):
             async with client.get(video_stream_url, stream=True) as response:
                 # Check if the response is successful
                 if response.status_code != 200:
+                    logging.error(f"Failed to fetch video stream from {video_stream_url}, status code: {response.status_code}")
                     raise HTTPException(status_code=500, detail="Failed to fetch video stream.")
                 
                 # Yield chunks of data from the response to the client
                 async for chunk in response.aiter_bytes():
                     yield chunk
-    except Exception as e:
-        logging.error(f"Error fetching video stream: {e}")
+    except httpx.RequestError as e:
+        logging.error(f"Error during request to {video_stream_url}: {e}")
         raise HTTPException(status_code=500, detail="Error fetching video stream.")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Unexpected error fetching video stream.")
 
 @app.get("/proxy-video-stream")
 async def proxy_video_stream(ip_address: str):
@@ -286,7 +292,11 @@ async def proxy_video_stream(ip_address: str):
     Proxy the video stream from an external URL and serve it to the client.
     The IP address is passed dynamically in the query parameter.
     """
-    return StreamingResponse(fetch_video_stream(ip_address), media_type="video/mp4")
+    try:
+        return StreamingResponse(fetch_video_stream(ip_address), media_type="video/mp4")
+    except Exception as e:
+        logging.error(f"Failed to serve video stream for IP {ip_address}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to serve video stream.")
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
