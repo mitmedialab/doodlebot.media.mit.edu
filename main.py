@@ -265,10 +265,10 @@ async def root():
 
 # Enhanced error handling
 async def fetch_video_stream(ip_address: str):
-    video_stream_url = f"http://{ip_address}:8000/stream.mjpg"  # Ensure this URL is correct
+    video_stream_url = f"http://{ip_address}:8000/video_feed"  # Ensure this URL is correct
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(http2=False) as client:  # Disable HTTP2 here
             async with client.get(video_stream_url, stream=True) as response:
                 if response.status_code != 200:
                     raise HTTPException(status_code=500, detail="Failed to fetch video stream.")
@@ -284,6 +284,7 @@ async def fetch_video_stream(ip_address: str):
     except Exception as e:
         logging.error(f"Error fetching video stream: {e}")
         raise HTTPException(status_code=500, detail="Error fetching video stream.")
+
 
 @app.get("/proxy-video-stream")
 async def proxy_video_stream(ip_address: str):
