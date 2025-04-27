@@ -293,7 +293,7 @@ async def proxy_video_stream(ip_address: str):
     The IP address is passed dynamically in the query parameter.
     """
     try:
-        return StreamingResponse(fetch_video_stream(ip_address), media_type="video/mp4")
+        return StreamingResponse(fetch_video_stream(ip_address), media_type="multipart/x-mixed-replace; boundary=frame")
     except Exception as e:
         logging.error(f"Failed to serve video stream for IP {ip_address}: {e}")
         raise HTTPException(status_code=500, detail="Failed to serve video stream.")
