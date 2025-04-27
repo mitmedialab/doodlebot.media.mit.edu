@@ -265,7 +265,7 @@ async def root():
 
 # Enhanced error handling
 async def fetch_video_stream(ip_address: str):
-    video_stream_url = f"http://{ip_address}:8000/video_feed"  # Ensure this URL is correct
+    video_stream_url = f"http://{ip_address}:8000/stream.mjpg"  # Ensure this URL is correct
 
     try:
         async with httpx.AsyncClient() as client:
