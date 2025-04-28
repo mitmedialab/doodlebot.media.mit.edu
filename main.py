@@ -268,20 +268,21 @@ async def root():
 async def fetch_video_stream(ip_address: str):
     # Construct the URL for the MJPEG feed
     video_stream_url = f"http://{ip_address}:8000/video_feed"
-
+    
     try:
-        async with httpx.AsyncClient() as client:
-            async with client.get(video_stream_url, stream=True) as response:
-                # If the response is not OK, raise an exception
+        async with httpx.AsyncClient(http2=False) as client:
+            async with client.stream("GET", video_stream_url) as response:
+                # Ensure the response is successful
                 if response.status_code != 200:
-                    raise Exception(f"Failed to fetch video stream, status code: {response.status_code}")
-
-                # Make sure to yield each chunk to maintain the streaming connection
+                    raise HTTPException(status_code=502, detail=f"Failed to fetch video stream, status code: {response.status_code}")
+                
+                # Yield chunks of the MJPEG stream continuously
                 async for chunk in response.aiter_bytes():
                     yield chunk
+
     except Exception as e:
         logging.error(f"Error fetching video stream: {e}")
-        raise Exception(f"Error fetching video stream: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching video stream: {str(e)}")
 
 @app.get("/proxy-video-stream")
 async def proxy_video_stream(ip_address: str):
@@ -296,7 +297,7 @@ async def proxy_video_stream(ip_address: str):
         )
     except Exception as e:
         logging.error(f"Error in proxy: {e}")
-        raise Exception(f"Error in proxy: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in proxy: {str(e)}")
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
