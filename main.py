@@ -282,6 +282,16 @@ async def proxy_video_stream(ip_address: str):
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
+@app.get("/mjpeg-viewer", response_class=HTMLResponse)
+async def mjpeg_viewer(ip_address: str):
+    return f"""
+    <html>
+      <body style="margin: 0;">
+        <img src="http://{ip_address}:8000/video_feed" style="width: 100%;" />
+      </body>
+    </html>
+    """
+
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
 async def chat_endpoint(audio_file: UploadFile = File(None)):
