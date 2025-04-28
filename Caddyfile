@@ -1,5 +1,12 @@
 doodlebot.media.mit.edu {
     reverse_proxy backend:80
+
+    @mjpeg path /proxy-video-stream*
+    reverse_proxy @mjpeg backend:80 {
+        transport http {
+            versions 1.1
+        }
+    }
 }
 
 http://doodlebot.media.mit.edu {
