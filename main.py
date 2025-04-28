@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import httpx
 import aiohttp
 import logging
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
