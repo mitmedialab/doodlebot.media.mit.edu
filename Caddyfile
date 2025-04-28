@@ -1,13 +1,5 @@
 doodlebot.media.mit.edu {
     reverse_proxy backend:80
-
-    reverse_proxy /proxy-video-stream/* http://{http.request.query.ip_address}:8000 {
-        transport http {
-            versions 1.1
-        }
-        read_timeout 0
-        write_timeout 0
-    }
 }
 
 http://doodlebot.media.mit.edu {

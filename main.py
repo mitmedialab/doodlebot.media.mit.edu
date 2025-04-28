@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import httpx
 import logging
 from fastapi.responses import FileResponse, StreamingResponse
@@ -264,28 +264,24 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
-# Enhanced error handling
 async def fetch_video_stream(ip_address: str):
-    # Construct the URL for the MJPEG feed
     video_stream_url = f"http://{ip_address}:8000/video_feed"
-    
+
     try:
-        async with httpx.AsyncClient(http2=False) as client:
-            async with client.stream("GET", video_stream_url) as response:
-                # Ensure the response is successful
-                if response.status_code != 200:
-                    raise HTTPException(status_code=502, detail=f"Failed to fetch video stream, status code: {response.status_code}")
-                
-                # Yield chunks of the MJPEG stream continuously
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+        async with httpx.AsyncClient() as client:
+            response = await client.get(video_stream_url, stream=True)
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch video stream, status code: {response.status_code}")
+
+            async for chunk in response.aiter_bytes():
+                yield chunk
 
     except Exception as e:
         logging.error(f"Error fetching video stream: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching video stream: {str(e)}")
+        raise
 
 @app.get("/proxy-video-stream")
-async def proxy_video_stream(ip_address: str):
+async def proxy_video_stream(ip_address: str = Query(..., description="IP address of the camera")):
     """
     Proxy the MJPEG video stream from an external URL.
     The IP address is passed dynamically in the query parameter.
@@ -297,7 +293,7 @@ async def proxy_video_stream(ip_address: str):
         )
     except Exception as e:
         logging.error(f"Error in proxy: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in proxy: {str(e)}")
+        raise
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
