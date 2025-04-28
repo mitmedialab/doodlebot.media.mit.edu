@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import httpx
+import aiohttp
 import logging
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -264,36 +265,22 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
-async def fetch_video_stream(ip_address: str):
-    video_stream_url = f"http://{ip_address}:8000/video_feed"
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(video_stream_url, stream=True)
-            if response.status_code != 200:
-                raise Exception(f"Failed to fetch video stream, status code: {response.status_code}")
-
-            async for chunk in response.aiter_bytes():
-                yield chunk
-
-    except Exception as e:
-        logging.error(f"Error fetching video stream: {e}")
-        raise
+async def mjpeg_proxy_stream(ip_address: str):
+    stream_url = f"http://{ip_address}:8000/video_feed"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(stream_url) as resp:
+            if resp.status != 200:
+                raise Exception(f"Failed to fetch stream: {resp.status}")
+            
+            async for data, _ in resp.content.iter_chunks():
+                yield data
 
 @app.get("/proxy-video-stream")
-async def proxy_video_stream(ip_address: str = Query(..., description="IP address of the camera")):
-    """
-    Proxy the MJPEG video stream from an external URL.
-    The IP address is passed dynamically in the query parameter.
-    """
-    try:
-        return StreamingResponse(
-            fetch_video_stream(ip_address),
-            media_type="multipart/x-mixed-replace; boundary=frame"
-        )
-    except Exception as e:
-        logging.error(f"Error in proxy: {e}")
-        raise
+async def proxy_video_stream(ip_address: str):
+    return StreamingResponse(
+        mjpeg_proxy_stream(ip_address),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
