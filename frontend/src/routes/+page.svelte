@@ -153,6 +153,7 @@
         };
 
         window.addEventListener("message", (e) => {
+            console.log("SENDING", e);
             if (e.data.includes("fetch---")) {
                 fetchResult(e);
             } else {
