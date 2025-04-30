@@ -110,11 +110,33 @@
         const url = new URL(playgroundURL);
         url.searchParams.set("ip", ip);
 
+        // INSERT API CALL HERE
+
         popup = window.open(url.toString());
 
         if (!popup) return alert("Please allow popups for this website");
 
         await waitForPopupToRespond();
+
+        const fetchResult = async ({ data, origin }: MessageEvent) => {
+            if (origin !== popupOrigin) return;
+
+            if (data.includes("fetch---")) {
+                const url = data.split("fetch---")[1];
+                console.log(`Fetching URL: ${url}`);
+
+                try {
+                const response = await fetch(url);
+                const text = await response.text();
+                
+                // Send the response back to the popup
+                popup?.postMessage(`fetchResponse---${text}`, playgroundURL);
+                } catch (error: any) {
+                console.error("Fetch error:", error);
+                popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                }
+            }
+        }
 
         const forwardToBLE = async ({ data, origin }: MessageEvent) => {
             if (origin !== popupOrigin) {
@@ -130,7 +152,14 @@
             });
         };
 
-        window.addEventListener("message", forwardToBLE);
+        window.addEventListener("message", (e) => {
+            if (e.data.includes("fetch---")) {
+                fetchResult(e);
+            } else {
+                forwardToBLE(e);
+            }
+            
+        });
         unsubscribers.push(() =>
             window.removeEventListener("message", forwardToBLE),
         );
