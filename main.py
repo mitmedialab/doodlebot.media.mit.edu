@@ -339,6 +339,36 @@ def get_static_directory(name: str):
     return os.path.join(os.getcwd(), name)
 
 
+@app.get("/fetch/images")
+@handle_errors
+async def fetch_images(ip: str = Query(..., description="IP address of the image server")):
+    """
+    Fetches image data from a remote server at http://{ip}:8080/images
+    """
+    url = f"http://{ip}:8080/images"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=f"Failed to fetch images from {url}"
+                    )
+                content_type = response.headers.get("Content-Type", "")
+                data = await response.read()
+
+                return StreamingResponse(
+                    iter([data]),
+                    media_type=content_type or "application/octet-stream"
+                )
+    except aiohttp.ClientError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching from {url}: {str(e)}"
+        )
+
+
 def try_mount_static_html(app, name: str, prefix: str = "/"):
     directory = get_static_directory(name)
     if os.path.exists(directory):
