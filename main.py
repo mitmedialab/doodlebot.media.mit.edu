@@ -275,11 +275,22 @@ async def mjpeg_proxy_stream(ip_address: str):
             async for data, _ in resp.content.iter_chunks():
                 yield data
 
-@app.get("/proxy-video-stream")
-async def proxy_video_stream(ip_address: str):
-    return StreamingResponse(
-        mjpeg_proxy_stream(ip_address),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
+
+@app.get("/proxy/video_feed")
+async def proxy_video_feed(request: Request):
+    client = httpx.AsyncClient()
+    upstream_response = await client.get(VIDEO_FEED_URL, timeout=None, stream=True)
+
+    if upstream_response.status_code != 200:
+        return StreamingResponse(content=upstream_response.aiter_bytes(), status_code=upstream_response.status_code)
+
+    async def stream_generator():
+        async for chunk in upstream_response.aiter_bytes():
+            yield chunk
+
+    return StreamingResponse(stream_generator(), media_type=upstream_response.headers.get("content-type", "multipart/x-mixed-replace"))
+
     )
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
