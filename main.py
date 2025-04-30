@@ -279,14 +279,16 @@ VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
 
 @app.get("/proxy/video_feed")
 async def proxy_video_feed():
-    client = httpx.AsyncClient()
 
     async def video_stream():
-        async with client.stream("GET", VIDEO_FEED_URL, timeout=None) as response:
-            async for chunk in response.aiter_bytes():
-                yield chunk
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", VIDEO_FEED_URL, timeout=None) as response:
+                async for chunk in response.aiter_bytes():
+                    print("sending...")
+                    yield chunk
 
     return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
 async def mjpeg_viewer(ip_address: str):
