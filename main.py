@@ -291,7 +291,6 @@ async def proxy_video_feed(request: Request):
 
     return StreamingResponse(stream_generator(), media_type=upstream_response.headers.get("content-type", "multipart/x-mixed-replace"))
 
-    )
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
 async def mjpeg_viewer(ip_address: str):
