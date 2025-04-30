@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import httpx
 import aiohttp
 import logging
@@ -278,7 +278,7 @@ async def mjpeg_proxy_stream(ip_address: str):
 VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
 
 @app.get("/proxy/video_feed")
-async def proxy_video_feed(request: Request):
+async def proxy_video_feed():
     client = httpx.AsyncClient()
     upstream_response = await client.get(VIDEO_FEED_URL, timeout=None, stream=True)
 
