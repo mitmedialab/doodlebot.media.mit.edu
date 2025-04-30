@@ -341,32 +341,21 @@ def get_static_directory(name: str):
 
 @app.get("/fetch/images")
 @handle_errors
-async def fetch_images(ip: str = Query(..., description="IP address of the image server")):
+async def proxy_images(ip: str = Query(..., description="The IP address of the target device")):
     """
-    Fetches image data from a remote server at http://{ip}:8080/images
+    Fetch image list from http://{ip}:8080/images and return the result as text/JSON.
     """
     url = f"http://{ip}:8080/images"
-
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=f"Failed to fetch images from {url}"
-                    )
-                content_type = response.headers.get("Content-Type", "")
-                data = await response.read()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            return response.text()  # or response.text if it's plain text
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Request error: {str(e)}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Error fetching image list: {str(e)}")
 
-                return StreamingResponse(
-                    iter([data]),
-                    media_type=content_type or "application/octet-stream"
-                )
-    except aiohttp.ClientError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching from {url}: {str(e)}"
-        )
 
 
 def try_mount_static_html(app, name: str, prefix: str = "/"):
