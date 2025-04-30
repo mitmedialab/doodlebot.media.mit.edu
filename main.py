@@ -10,6 +10,7 @@ import azure.cognitiveservices.speech as speechsdk
 from openai import OpenAI
 import pyaudio
 import wave
+import asyncio
 import tempfile
 import os
 from dotenv import load_dotenv
@@ -286,6 +287,7 @@ async def proxy_video_feed():
                 async for chunk in response.aiter_bytes():
                     print("sending...")
                     yield chunk
+                    await asyncio.sleep(0.001)
 
     return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
