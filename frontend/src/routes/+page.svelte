@@ -123,7 +123,10 @@
             const canvas = popup?.document.createElement('canvas');
             const ctx = canvas?.getContext('2d');
 
+            console.log("after popup", popup);
+
             const response = await fetch('http://192.168.41.214:8000/video_feed');
+            console.log("after response", response);
             const reader = response.body.getReader();
 
             let buffer = new Uint8Array();
