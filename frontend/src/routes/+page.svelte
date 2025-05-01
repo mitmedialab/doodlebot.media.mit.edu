@@ -118,7 +118,8 @@
 
         await waitForPopupToRespond();
 
-
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
         const response = await fetch('http://192.168.41.214:8000/video_feed');
         console.log("after response", response);
         const reader = response.body.getReader();
@@ -129,6 +130,7 @@
         let buffer = new Uint8Array();
         const runLoop = async () => {
             while (true) {
+                
                 const { value, done } = await reader.read();
                 if (done) break;
                 if (!value) continue;
