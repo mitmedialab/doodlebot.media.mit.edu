@@ -118,61 +118,70 @@
 
         await waitForPopupToRespond();
 
-        // Create an <img> element in the parent
-        //popup.onload = async () => {
-            const canvas = popup?.document.createElement('canvas');
-            const ctx = canvas?.getContext('2d');
+        popup.onload = () => {
+  console.log('Popup loaded');
+  const img = popup?.document.createElement('img');
+  img.src = 'http://ip:8000';  // MJPEG stream URL
+  img.style.width = '100%';
+  img.style.height = 'auto';
+  //popup.document.body.appendChild(img);
+};
 
-            console.log("after popup", popup);
+        // // Create an <img> element in the parent
+        // //popup.onload = async () => {
+        //     const canvas = popup?.document.createElement('canvas');
+        //     const ctx = canvas?.getContext('2d');
 
-            const response = await fetch('http://192.168.41.214:8000/video_feed');
-            console.log("after response", response);
-            const reader = response.body.getReader();
+        //     console.log("after popup", popup);
 
-            let buffer = new Uint8Array();
-        const runLoop = async () => {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (!value) continue;
+        //     const response = await fetch('http://192.168.41.214:8000/video_feed');
+        //     console.log("after response", response);
+        //     const reader = response.body.getReader();
 
-                // Concatenate buffer
-                const tmp = new Uint8Array(buffer.length + value.length);
-                tmp.set(buffer);
-                tmp.set(value, buffer.length);
-                buffer = tmp;
+        //     let buffer = new Uint8Array();
+        // const runLoop = async () => {
+        //     while (true) {
+        //         const { value, done } = await reader.read();
+        //         if (done) break;
+        //         if (!value) continue;
 
-                // Look for JPEG SOI/EOI markers (0xFFD8 ... 0xFFD9)
-                let start = buffer.indexOf(0xff);
-                while (start !== -1 && start + 1 < buffer.length) {
-                    if (buffer[start + 1] === 0xd8) break; // JPEG SOI
-                    start = buffer.indexOf(0xff, start + 1);
-                }
+        //         // Concatenate buffer
+        //         const tmp = new Uint8Array(buffer.length + value.length);
+        //         tmp.set(buffer);
+        //         tmp.set(value, buffer.length);
+        //         buffer = tmp;
 
-                let end = buffer.indexOf(0xff, start + 2);
-                while (end !== -1 && end + 1 < buffer.length) {
-                    if (buffer[end + 1] === 0xd9) {
-                        end += 2;
-                        break;
-                    }
-                end = buffer.indexOf(0xff, end + 1);
-                }
+        //         // Look for JPEG SOI/EOI markers (0xFFD8 ... 0xFFD9)
+        //         let start = buffer.indexOf(0xff);
+        //         while (start !== -1 && start + 1 < buffer.length) {
+        //             if (buffer[start + 1] === 0xd8) break; // JPEG SOI
+        //             start = buffer.indexOf(0xff, start + 1);
+        //         }
 
-                if (start !== -1 && end !== -1 && end > start) {
-                    const jpeg = buffer.slice(start, end);
-                    buffer = buffer.slice(end); // Remove used part
+        //         let end = buffer.indexOf(0xff, start + 2);
+        //         while (end !== -1 && end + 1 < buffer.length) {
+        //             if (buffer[end + 1] === 0xd9) {
+        //                 end += 2;
+        //                 break;
+        //             }
+        //         end = buffer.indexOf(0xff, end + 1);
+        //         }
 
-                    // Turn JPEG into blob and draw on canvas
-                    const blob = new Blob([jpeg], { type: 'image/jpeg' });
-                    const img = new Image();
-                    img.onload = () => {
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    };
-                    img.src = URL.createObjectURL(blob);
-                }
-            }
-        }
-        runLoop();
+        //         if (start !== -1 && end !== -1 && end > start) {
+        //             const jpeg = buffer.slice(start, end);
+        //             buffer = buffer.slice(end); // Remove used part
+
+        //             // Turn JPEG into blob and draw on canvas
+        //             const blob = new Blob([jpeg], { type: 'image/jpeg' });
+        //             const img = new Image();
+        //             img.onload = () => {
+        //                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        //             };
+        //             img.src = URL.createObjectURL(blob);
+        //         }
+        //     }
+        // }
+        // runLoop();
         //}
 
 
