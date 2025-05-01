@@ -119,18 +119,14 @@
         await waitForPopupToRespond();
 
 
-        // // Create an <img> element in the parent
-        // //popup.onload = async () => {
-        //     const canvas = popup?.document.createElement('canvas');
-        //     const ctx = canvas?.getContext('2d');
+        const response = await fetch('http://192.168.41.214:8000/video_feed');
+        console.log("after response", response);
+        const reader = response.body.getReader();
 
-        //     console.log("after popup", popup);
+        const img = document.createElement('img');
+        document.body.appendChild(img);
 
-            const response = await fetch('http://192.168.41.214:8000/video_feed');
-            console.log("after response", response);
-            const reader = response.body.getReader();
-
-            let buffer = new Uint8Array();
+        let buffer = new Uint8Array();
         const runLoop = async () => {
             while (true) {
                 const { value, done } = await reader.read();
@@ -170,14 +166,12 @@
                         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                     };
                     const url = URL.createObjectURL(blob);
-                    popup?.postMessage(`imageUrl---${url}`, playgroundURL);
+                    img.src = url;
+                    //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
                 }
             }
         }
         runLoop();
-        //}
-
-
 
         const fetchResult = async ({ data, origin }: MessageEvent) => {
             if (origin !== popupOrigin) return;
