@@ -126,6 +126,9 @@
 
         const img = document.createElement('img');
         document.body.appendChild(img);
+        img.id = "test_video";
+        img.style.width = "200px";
+        img.style.height = "200px";
 
         let buffer = new Uint8Array();
         const runLoop = async () => {
