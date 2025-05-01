@@ -177,7 +177,7 @@
                     };
                     const url = URL.createObjectURL(blob);
                     console.log("setting img src", url);
-                    document.getElementById("video_feed").src = url;
+                    document.getElementById("test_video").src = url;
                     //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
                 }
             }
