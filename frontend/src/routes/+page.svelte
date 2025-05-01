@@ -171,6 +171,7 @@
                         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                     };
                     const url = URL.createObjectURL(blob);
+                    console.log("setting img src", url);
                     img.src = url;
                     //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
                 }
