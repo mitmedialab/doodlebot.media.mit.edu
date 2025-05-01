@@ -126,14 +126,14 @@
 
         const img = document.createElement('img');
         
-        img.id = "test_video";
-        img.style.width = "200px";
-        img.style.height = "200px";
-        img.style.position = "absolute";
-        img.style.zIndex = "100";
-        img.style.top = "0px";
-        img.style.left = "0px";
-        document.body.appendChild(img);
+        // img.id = "test_video";
+        // img.style.width = "200px";
+        // img.style.height = "200px";
+        // img.style.position = "absolute";
+        // img.style.zIndex = "100";
+        // img.style.top = "0px";
+        // img.style.left = "0px";
+        // document.body.appendChild(img);
 
         let buffer = new Uint8Array();
         let previousURL = null;
@@ -172,17 +172,17 @@
 
                     // Turn JPEG into blob and draw on canvas
                     const blob = new Blob([jpeg], { type: 'image/jpeg' });
-                    const img = new Image();
-                    img.onload = () => {
+                    const img2 = new Image();
+                    img2.onload = () => {
                         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                     };
-                    if (previousURL != null) {
-                        URL.revokeObjectURL(previousURL);
-                    }
-                    const url = URL.createObjectURL(blob);
-                    previousURL = url;
+                    // if (previousURL != null) {
+                    //     URL.revokeObjectURL(previousURL);
+                    // }
+                    // const url = URL.createObjectURL(blob);
+                    // previousURL = url;
                     //console.log("setting img src", url);
-                    document.getElementById("test_video").src = url;
+                    //document.getElementById("test_video").src = url;
                     //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
                     
                 }
