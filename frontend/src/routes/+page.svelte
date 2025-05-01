@@ -118,6 +118,17 @@
 
         await waitForPopupToRespond();
 
+        // Create an <img> element in the parent
+        const img = new Image();
+        img.src = 'http://192.168.41.214:8000/video_feed'; // set this in the parent to avoid CORS issues
+        img.id = "video_feed";
+
+        // Inject the <img> into the popup
+        const container = popup.document.body;
+        if (container) {
+            container.appendChild(img);
+        }
+
         const fetchResult = async ({ data, origin }: MessageEvent) => {
             if (origin !== popupOrigin) return;
 
@@ -126,14 +137,14 @@
                 console.log(`Fetching URL: ${url}`);
 
                 try {
-                const response = await fetch(url);
-                const text = await response.text();
-                
-                // Send the response back to the popup
-                popup?.postMessage(`fetchResponse---${text}`, playgroundURL);
+                    const response = await fetch(url);
+                    const text = await response.text();
+                    
+                    // Send the response back to the popup
+                    popup?.postMessage(`fetchResponse---${text}`, playgroundURL);
                 } catch (error: any) {
-                console.error("Fetch error:", error);
-                popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                    console.error("Fetch error:", error);
+                    popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
                 }
             }
         }
