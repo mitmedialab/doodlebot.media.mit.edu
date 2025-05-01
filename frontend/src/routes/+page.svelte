@@ -136,6 +136,7 @@
         document.body.appendChild(img);
 
         let buffer = new Uint8Array();
+        let previousURL = null;
         const runLoop = async () => {
             while (true) {
                 
@@ -175,10 +176,15 @@
                     img.onload = () => {
                         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                     };
+                    if (previousURL != null) {
+                        URL.revokeObjectURL(previousURL);
+                    }
                     const url = URL.createObjectURL(blob);
-                    console.log("setting img src", url);
+                    previousURL = url;
+                    //console.log("setting img src", url);
                     document.getElementById("test_video").src = url;
                     //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
+                    
                 }
             }
         }
