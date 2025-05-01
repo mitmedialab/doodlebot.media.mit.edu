@@ -119,7 +119,7 @@
         await waitForPopupToRespond();
 
         // Create an <img> element in the parent
-        popup.onload = async () => {
+        //popup.onload = async () => {
             const canvas = popup?.document.createElement('canvas');
             const ctx = canvas?.getContext('2d');
 
@@ -127,7 +127,7 @@
             const reader = response.body.getReader();
 
             let buffer = new Uint8Array();
-
+        const runLoop = async () => {
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
@@ -169,6 +169,8 @@
                 }
             }
         }
+        runLoop();
+        //}
 
 
 
