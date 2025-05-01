@@ -119,15 +119,58 @@
         await waitForPopupToRespond();
 
         // Create an <img> element in the parent
-        const img = new Image();
-        img.src = 'http://192.168.41.214:8000/video_feed'; // set this in the parent to avoid CORS issues
-        img.id = "video_feed";
+        popup.onload = async () => {
+            const canvas = popup?.document.createElement('canvas');
+            const ctx = canvas?.getContext('2d');
 
-        // Inject the <img> into the popup
-        const container = popup.document.body;
-        if (container) {
-            container.appendChild(img);
+            const response = await fetch('http://192.168.41.214:8000/video_feed');
+            const reader = response.body.getReader();
+
+            let buffer = new Uint8Array();
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (!value) continue;
+
+                // Concatenate buffer
+                const tmp = new Uint8Array(buffer.length + value.length);
+                tmp.set(buffer);
+                tmp.set(value, buffer.length);
+                buffer = tmp;
+
+                // Look for JPEG SOI/EOI markers (0xFFD8 ... 0xFFD9)
+                let start = buffer.indexOf(0xff);
+                while (start !== -1 && start + 1 < buffer.length) {
+                    if (buffer[start + 1] === 0xd8) break; // JPEG SOI
+                    start = buffer.indexOf(0xff, start + 1);
+                }
+
+                let end = buffer.indexOf(0xff, start + 2);
+                while (end !== -1 && end + 1 < buffer.length) {
+                    if (buffer[end + 1] === 0xd9) {
+                        end += 2;
+                        break;
+                    }
+                end = buffer.indexOf(0xff, end + 1);
+                }
+
+                if (start !== -1 && end !== -1 && end > start) {
+                    const jpeg = buffer.slice(start, end);
+                    buffer = buffer.slice(end); // Remove used part
+
+                    // Turn JPEG into blob and draw on canvas
+                    const blob = new Blob([jpeg], { type: 'image/jpeg' });
+                    const img = new Image();
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    };
+                    img.src = URL.createObjectURL(blob);
+                }
+            }
         }
+
+
 
         const fetchResult = async ({ data, origin }: MessageEvent) => {
             if (origin !== popupOrigin) return;
