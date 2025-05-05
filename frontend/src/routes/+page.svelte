@@ -137,6 +137,7 @@
 
         let buffer = new Uint8Array();
         let previousURL = null;
+        let first = true;
         const runLoop = async () => {
             while (true) {
                 
@@ -176,14 +177,17 @@
                     img2.onload = () => {
                         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                     };
-                    // if (previousURL != null) {
-                    //     URL.revokeObjectURL(previousURL);
-                    // }
-                    // const url = URL.createObjectURL(blob);
-                    // previousURL = url;
-                    //console.log("setting img src", url);
-                    //document.getElementById("test_video").src = url;
-                    //popup?.postMessage(`imageUrl---${url}`, playgroundURL);
+                    if (first) {
+                        if (previousURL != null) {
+                            URL.revokeObjectURL(previousURL);
+                        }
+                        const url = URL.createObjectURL(blob);
+                        previousURL = url;
+                        console.log("setting img src", url);
+                        document.getElementById("test_video").src = url;
+                        popup?.postMessage(`imageUrl---${url}`, playgroundURL);
+                        first = false;
+                    }
                     
                 }
             }
