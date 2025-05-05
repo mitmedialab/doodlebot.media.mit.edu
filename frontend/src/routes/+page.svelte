@@ -206,7 +206,7 @@
                     const text = await response.text();
                     
                     // Send the response back to the popup
-                    popup?.postMessage(`fetchResponse---${text}`, playgroundURL);
+                    popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
                 } catch (error: any) {
                     console.error("Fetch error:", error);
                     popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
