@@ -118,6 +118,52 @@
 
         await waitForPopupToRespond();
 
+        
+
+        const fetchResult = async ({ data, origin }: MessageEvent) => {
+            if (origin !== popupOrigin) return;
+
+            if (data.includes("fetch---")) {
+                const url = data.split("fetch---")[1];
+                console.log(`Fetching URL: ${url}`);
+
+                try {
+                    const response = await fetch(url);
+                    const text = await response.text();
+                    
+                    // Send the response back to the popup
+                    popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
+                } catch (error: any) {
+                    console.error("Fetch error:", error);
+                    popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                }
+            }
+        }
+
+        const forwardToBLE = async ({ data, origin }: MessageEvent) => {
+            if (origin !== popupOrigin) {
+                console.log("origin mismatch", origin, popupOrigin);
+                return
+            };
+            console.log("sending data", data);
+            await uartService.sendText(data);
+            let text = data + constants.commandCompleteIdentifier;
+            console.log("forwarding to popup", text);
+            forwardToPopup({
+                detail: data + constants.commandCompleteIdentifier,
+            });
+        };
+
+        window.addEventListener("message", (e) => {
+            console.log("RECEIVING", e);
+            if (e.data.includes("fetch---")) {
+                fetchResult(e);
+            } else {
+                forwardToBLE(e);
+            }
+            
+        });
+
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         const response = await fetch('http://192.168.41.214:8000/video_feed');
@@ -194,49 +240,10 @@
         }
         runLoop();
 
-        const fetchResult = async ({ data, origin }: MessageEvent) => {
-            if (origin !== popupOrigin) return;
+        
 
-            if (data.includes("fetch---")) {
-                const url = data.split("fetch---")[1];
-                console.log(`Fetching URL: ${url}`);
+        
 
-                try {
-                    const response = await fetch(url);
-                    const text = await response.text();
-                    
-                    // Send the response back to the popup
-                    popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
-                } catch (error: any) {
-                    console.error("Fetch error:", error);
-                    popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
-                }
-            }
-        }
-
-        const forwardToBLE = async ({ data, origin }: MessageEvent) => {
-            if (origin !== popupOrigin) {
-                console.log("origin mismatch", origin, popupOrigin);
-                return
-            };
-            console.log("sending data", data);
-            await uartService.sendText(data);
-            let text = data + constants.commandCompleteIdentifier;
-            console.log("forwarding to popup", text);
-            forwardToPopup({
-                detail: data + constants.commandCompleteIdentifier,
-            });
-        };
-
-        window.addEventListener("message", (e) => {
-            console.log("SENDING", e);
-            if (e.data.includes("fetch---")) {
-                fetchResult(e);
-            } else {
-                forwardToBLE(e);
-            }
-            
-        });
         unsubscribers.push(() =>
             window.removeEventListener("message", forwardToBLE),
         );
