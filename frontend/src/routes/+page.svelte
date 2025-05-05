@@ -126,14 +126,14 @@
 
         const img = document.createElement('img');
         
-        // img.id = "test_video";
-        // img.style.width = "200px";
-        // img.style.height = "200px";
-        // img.style.position = "absolute";
-        // img.style.zIndex = "100";
-        // img.style.top = "0px";
-        // img.style.left = "0px";
-        // document.body.appendChild(img);
+        img.id = "test_video";
+        img.style.width = "200px";
+        img.style.height = "200px";
+        img.style.position = "absolute";
+        img.style.zIndex = "100";
+        img.style.top = "0px";
+        img.style.left = "0px";
+        document.body.appendChild(img);
 
         let buffer = new Uint8Array();
         let previousURL = null;
