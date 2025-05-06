@@ -87,9 +87,9 @@
 
         unsubscribe();
 
-        const device = await bluetooth.requestDevice({
-            filters: [{ services: [UartService.uuid] }],
-        });
+        // const device = await bluetooth.requestDevice({
+        //     filters: [{ services: [UartService.uuid] }],
+        // });
 
         // if (!device) return alert("No device selected");
         // if (!device.gatt) return alert("No GATT server");
