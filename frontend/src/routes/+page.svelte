@@ -87,24 +87,24 @@
 
         unsubscribe();
 
-        // const device = await bluetooth.requestDevice({
-        //     filters: [{ services: [UartService.uuid] }],
-        // });
+        const device = await bluetooth.requestDevice({
+            filters: [{ services: [UartService.uuid] }],
+        });
 
-        // if (!device) return alert("No device selected");
-        // if (!device.gatt) return alert("No GATT server");
+        if (!device) return alert("No device selected");
+        if (!device.gatt) return alert("No GATT server");
 
-        //if (!device.gatt.connected) await device.gatt.connect();
+        if (!device.gatt.connected) await device.gatt.connect();
 
-        //const services = await device.gatt.getPrimaryServices();
+        const services = await device.gatt.getPrimaryServices();
 
-        // const found = services.find(
-        //     (service) => service.uuid === UartService.uuid,
-        // );
+        const found = services.find(
+            (service) => service.uuid === UartService.uuid,
+        );
 
-        // if (!found) return alert("No UART service found");
+        if (!found) return alert("No UART service found");
 
-        //const uartService = await getUartService(found, device);
+        const uartService = await getUartService(found, device);
 
         // handle case if playgroundURL ends in question mark (?)
         const url = new URL(playgroundURL);
@@ -146,7 +146,7 @@
                 return
             };
             console.log("sending data", data);
-            //await uartService.sendText(data);
+            await uartService.sendText(data);
             let text = data + constants.commandCompleteIdentifier;
             console.log("forwarding to popup", text);
             forwardToPopup({
