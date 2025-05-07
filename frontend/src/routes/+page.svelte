@@ -124,18 +124,36 @@
             if (origin !== popupOrigin) return;
 
             if (data.includes("fetch---")) {
-                const url = data.split("fetch---")[1];
-                console.log(`Fetching URL: ${url}`);
+                const type = data.split("---")[1];
+                if (type == "webrtc") {
+                    const description = data.split("---")[2];
+                    const webrtcResponse = await fetch(`http://${ip}:8000/webrtc`, {
+                        method: 'POST',
+                        body: description,
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                    const webrtcJson = await webrtcResponse.json();
+                    popup?.postMessage(`fetchResponse---webrtc---${JSON.stringify(webrtcJson)}`, playgroundURL);
+                } else {
+                    const url = data.split("---")[2];
+                    console.log(`Fetching URL: ${url}`);
 
-                try {
-                    const response = await fetch(url);
-                    const text = await response.text();
-                    
-                    // Send the response back to the popup
-                    popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
-                } catch (error: any) {
-                    console.error("Fetch error:", error);
-                    popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                    try {
+                        const response = await fetch(url);
+                        let text = "";
+                        if (type == "text") {
+                            text = await response.text();
+                        } else if (type == "json") {
+                            text = await response.json();
+                            text = JSON.stringify(text);
+                        }
+                        
+                        // Send the response back to the popup
+                        popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
+                    } catch (error: any) {
+                        console.error("Fetch error:", error);
+                        popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                    }
                 }
             }
         }
@@ -164,81 +182,81 @@
             
         });
 
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        const response = await fetch('http://192.168.41.214:8000/video_feed');
-        console.log("after response", response);
-        const reader = response.body.getReader();
+        // const canvas = document.createElement('canvas');
+        // const ctx = canvas.getContext('2d');
+        // const response = await fetch('http://192.168.41.214:8000/video_feed');
+        // console.log("after response", response);
+        // const reader = response.body.getReader();
 
-        const img = document.createElement('img');
+        // const img = document.createElement('img');
         
-        img.id = "test_video";
-        img.style.width = "200px";
-        img.style.height = "200px";
-        img.style.position = "absolute";
-        img.style.zIndex = "100";
-        img.style.top = "0px";
-        img.style.left = "0px";
-        document.body.appendChild(img);
+        // img.id = "test_video";
+        // img.style.width = "200px";
+        // img.style.height = "200px";
+        // img.style.position = "absolute";
+        // img.style.zIndex = "100";
+        // img.style.top = "0px";
+        // img.style.left = "0px";
+        // document.body.appendChild(img);
 
-        let buffer = new Uint8Array();
-        let previousURL = null;
-        let first = true;
-        const runLoop = async () => {
-            while (true) {
+        // let buffer = new Uint8Array();
+        // let previousURL = null;
+        // let first = true;
+        // const runLoop = async () => {
+        //     while (true) {
                 
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (!value) continue;
+        //         const { value, done } = await reader.read();
+        //         if (done) break;
+        //         if (!value) continue;
 
-                // Concatenate buffer
-                const tmp = new Uint8Array(buffer.length + value.length);
-                tmp.set(buffer);
-                tmp.set(value, buffer.length);
-                buffer = tmp;
+        //         // Concatenate buffer
+        //         const tmp = new Uint8Array(buffer.length + value.length);
+        //         tmp.set(buffer);
+        //         tmp.set(value, buffer.length);
+        //         buffer = tmp;
 
-                // Look for JPEG SOI/EOI markers (0xFFD8 ... 0xFFD9)
-                let start = buffer.indexOf(0xff);
-                while (start !== -1 && start + 1 < buffer.length) {
-                    if (buffer[start + 1] === 0xd8) break; // JPEG SOI
-                    start = buffer.indexOf(0xff, start + 1);
-                }
+        //         // Look for JPEG SOI/EOI markers (0xFFD8 ... 0xFFD9)
+        //         let start = buffer.indexOf(0xff);
+        //         while (start !== -1 && start + 1 < buffer.length) {
+        //             if (buffer[start + 1] === 0xd8) break; // JPEG SOI
+        //             start = buffer.indexOf(0xff, start + 1);
+        //         }
 
-                let end = buffer.indexOf(0xff, start + 2);
-                while (end !== -1 && end + 1 < buffer.length) {
-                    if (buffer[end + 1] === 0xd9) {
-                        end += 2;
-                        break;
-                    }
-                end = buffer.indexOf(0xff, end + 1);
-                }
+        //         let end = buffer.indexOf(0xff, start + 2);
+        //         while (end !== -1 && end + 1 < buffer.length) {
+        //             if (buffer[end + 1] === 0xd9) {
+        //                 end += 2;
+        //                 break;
+        //             }
+        //         end = buffer.indexOf(0xff, end + 1);
+        //         }
 
-                if (start !== -1 && end !== -1 && end > start) {
-                    const jpeg = buffer.slice(start, end);
-                    buffer = buffer.slice(end); // Remove used part
+        //         if (start !== -1 && end !== -1 && end > start) {
+        //             const jpeg = buffer.slice(start, end);
+        //             buffer = buffer.slice(end); // Remove used part
 
-                    // Turn JPEG into blob and draw on canvas
-                    const blob = new Blob([jpeg], { type: 'image/jpeg' });
-                    const img2 = new Image();
-                    img2.onload = () => {
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    };
-                    if (first) {
-                        if (previousURL != null) {
-                            URL.revokeObjectURL(previousURL);
-                        }
-                        const url = URL.createObjectURL(blob);
-                        previousURL = url;
-                        console.log("setting img src", url);
-                        document.getElementById("test_video").src = url;
-                        popup?.postMessage(`imageUrl---${url}`, playgroundURL);
-                        first = false;
-                    }
+        //             // Turn JPEG into blob and draw on canvas
+        //             const blob = new Blob([jpeg], { type: 'image/jpeg' });
+        //             const img2 = new Image();
+        //             img2.onload = () => {
+        //                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        //             };
+        //             if (first) {
+        //                 if (previousURL != null) {
+        //                     URL.revokeObjectURL(previousURL);
+        //                 }
+        //                 const url = URL.createObjectURL(blob);
+        //                 previousURL = url;
+        //                 console.log("setting img src", url);
+        //                 document.getElementById("test_video").src = url;
+        //                 popup?.postMessage(`imageUrl---${url}`, playgroundURL);
+        //                 first = false;
+        //             }
                     
-                }
-            }
-        }
-        runLoop();
+        //         }
+        //     }
+        // }
+        // runLoop();
 
         
 
