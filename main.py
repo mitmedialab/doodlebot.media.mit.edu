@@ -215,6 +215,21 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
 
+    async def process_voice_input_chat(self, audio_data: bytes = None) -> tuple[str, str]:
+        """Process voice input and return response text and audio file path"""
+        try:
+            if audio_data is None:
+                audio_data = await self.record_audio()
+
+            transcript = await self.transcribe_audio(audio_data)
+            audio_path = await self.synthesize_speech(transcript)
+
+            return transcript, audio_path
+
+        except Exception as e:
+            raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
+        
+
     def cleanup(self):
         """Clean up temporary files"""
         import shutil
@@ -232,6 +247,32 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
+@app.post("/repeat_after_me")
+@handle_errors
+async def repeat_after_me(audio_file: UploadFile = File(None)):
+    assistant = VoiceAssistant()
+    try:
+        audio_data = None
+        if audio_file:
+            audio_data = await audio_file.read()
+        
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data)
+
+        with open(audio_path, 'rb') as f:
+            audio_content = f.read()
+
+        assistant.cleanup()
+
+        temp_response_path = tempfile.mktemp(suffix='.wav')
+        with open(temp_response_path, 'wb') as f:
+            f.write(audio_content)
+
+        return FileResponse(
+            path=temp_response_path,
+            media_type="audio/wav",
+            headers={"text-response": response_text},
+            filename="response.wav"
+        )
 
 @app.post("/speak")
 @handle_errors
@@ -337,25 +378,6 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
 
 def get_static_directory(name: str):
     return os.path.join(os.getcwd(), name)
-
-
-@app.get("/fetch/images")
-@handle_errors
-async def proxy_images(ip: str = Query(..., description="The IP address of the target device")):
-    """
-    Fetch image list from http://{ip}:8080/images and return the result as text/JSON.
-    """
-    url = f"http://{ip}:8080/images"
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            response.raise_for_status()
-            return response.text()  # or response.text if it's plain text
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Request error: {str(e)}")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Error fetching image list: {str(e)}")
-
 
 
 def try_mount_static_html(app, name: str, prefix: str = "/"):
