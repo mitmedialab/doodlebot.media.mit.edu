@@ -130,7 +130,7 @@
                     const description = data.split("---")[2];
                     const webrtcResponse = await fetch(`http://${ip}:8001/webrtc`, {
                         method: 'POST',
-                        body: description,
+                        body: JSON.parse(description),
                         headers: { 'Content-Type': 'application/json' }
                     })
                     const webrtcJson = await webrtcResponse.json();
