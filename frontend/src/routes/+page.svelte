@@ -125,6 +125,7 @@
 
             if (data.includes("fetch---")) {
                 const type = data.split("---")[1];
+                console.log("data", type);
                 if (type == "webrtc") {
                     const description = data.split("---")[2];
                     const webrtcResponse = await fetch(`http://${ip}:8000/webrtc`, {
