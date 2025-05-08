@@ -128,6 +128,7 @@
                 console.log("data", type);
                 if (type == "webrtc") {
                     const description = data.split("---")[2];
+                    console.log("description", JSON.parse(description));
                     const webrtcResponse = await fetch(`http://${ip}:8001/webrtc`, {
                         method: 'POST',
                         body: JSON.parse(description),
