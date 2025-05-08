@@ -273,6 +273,10 @@ async def repeat_after_me(audio_file: UploadFile = File(None)):
             headers={"text-response": response_text},
             filename="response.wav"
         )
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
 
 @app.post("/speak")
 @handle_errors
