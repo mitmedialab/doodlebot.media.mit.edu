@@ -131,7 +131,7 @@
                     console.log("description", JSON.parse(description));
                     const webrtcResponse = await fetch(`http://${ip}:8001/webrtc`, {
                         method: 'POST',
-                        body: JSON.parse(description),
+                        body: description,
                         headers: { 'Content-Type': 'application/json' }
                     })
                     const webrtcJson = await webrtcResponse.json();
