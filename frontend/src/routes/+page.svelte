@@ -118,7 +118,23 @@
 
         await waitForPopupToRespond();
 
-        
+        function base64ToUint8Array(base64: string): Uint8Array {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function uint8ArrayToBase64(bytes: Uint8Array): string {
+            let binary = "";
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
 
         const fetchResult = async ({ data, origin }: MessageEvent) => {
             if (origin !== popupOrigin) return;
@@ -136,6 +152,39 @@
                     })
                     const webrtcJson = await webrtcResponse.json();
                     popup?.postMessage(`fetchResponse---webrtc---${JSON.stringify(webrtcJson)}`, playgroundURL);
+                } else if (type == "chat") {
+                    const url = data.split("---")[2];
+        //             const payload = {
+        //     filename: file.name,
+        //     content: base64,
+        //     mimeType: blob.type,
+        //   };
+                    const payload = JSON.parse(data.split("---")[3]);
+                    const fileData = base64ToUint8Array(payload.content);
+                    const file = new File([fileData], payload.filename, { type: payload.mimeType });
+                    const formData = new FormData();
+                    formData.append("audio_file", file);
+                    const response = await fetch(url, {
+                        method: "POST",
+                        body: formData,
+                    });
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.log("Error response:", errorText);
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const textResponse = response.headers.get("text-response");
+                    console.log("Text Response:", textResponse);
+
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    console.log("Audio URL:", audioUrl);
+
+                    const audio = new Audio(audioUrl);
+                    const array = await blob.arrayBuffer();
+                    const base64 = uint8ArrayToBase64(new Uint8Array(array));
+                    popup?.postMessage(`fetchResponse---${url}---${base64}`, playgroundURL);
                 } else {
                     const url = data.split("---")[2];
                     console.log(`Fetching URL: ${url}`);
