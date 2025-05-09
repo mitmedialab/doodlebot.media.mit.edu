@@ -1,5 +1,8 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+import httpx
+import aiohttp
+import logging
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
@@ -7,6 +10,7 @@ import azure.cognitiveservices.speech as speechsdk
 from openai import OpenAI
 import pyaudio
 import wave
+import asyncio
 import tempfile
 import os
 from dotenv import load_dotenv
@@ -24,7 +28,8 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8602", "http://doodlebot.media.mit.edu"],  # Allows all origins
+    allow_origins=["*"],  # Allows all origins
+    # "http://localhost:8602", "http://doodlebot.media.mit.edu"
     allow_credentials=True,
     allow_methods=["GET", "POST"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -210,6 +215,21 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
 
+    async def process_voice_input_chat(self, audio_data: bytes = None) -> tuple[str, str]:
+        """Process voice input and return response text and audio file path"""
+        try:
+            if audio_data is None:
+                audio_data = await self.record_audio()
+
+            transcript = await self.transcribe_audio(audio_data)
+            audio_path = await self.synthesize_speech(transcript)
+
+            return transcript, audio_path
+
+        except Exception as e:
+            raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
+        
+
     def cleanup(self):
         """Clean up temporary files"""
         import shutil
@@ -227,6 +247,36 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
+@app.post("/repeat_after_me")
+@handle_errors
+async def repeat_after_me(audio_file: UploadFile = File(None)):
+    assistant = VoiceAssistant()
+    try:
+        audio_data = None
+        if audio_file:
+            audio_data = await audio_file.read()
+        
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data)
+
+        with open(audio_path, 'rb') as f:
+            audio_content = f.read()
+
+        assistant.cleanup()
+
+        temp_response_path = tempfile.mktemp(suffix='.wav')
+        with open(temp_response_path, 'wb') as f:
+            f.write(audio_content)
+
+        return FileResponse(
+            path=temp_response_path,
+            media_type="audio/wav",
+            headers={"text-response": response_text},
+            filename="response.wav"
+        )
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
 
 @app.post("/speak")
 @handle_errors
@@ -261,6 +311,41 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
+async def mjpeg_proxy_stream(ip_address: str):
+    stream_url = f"http://{ip_address}:8000/video_feed"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(stream_url) as resp:
+            if resp.status != 200:
+                raise Exception(f"Failed to fetch stream: {resp.status}")
+            
+            async for data, _ in resp.content.iter_chunks():
+                yield data
+
+VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
+
+@app.get("/proxy/video_feed")
+async def proxy_video_feed():
+
+    async def video_stream():
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", VIDEO_FEED_URL, timeout=None) as response:
+                async for chunk in response.aiter_bytes():
+                    print("sending...")
+                    yield chunk
+                    await asyncio.sleep(0.001)
+
+    return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/mjpeg-viewer", response_class=HTMLResponse)
+async def mjpeg_viewer(ip_address: str):
+    return f"""
+    <html>
+      <body style="margin: 0;">
+        <img src="http://{ip_address}:8000/video_feed" style="width: 100%;" />
+      </body>
+    </html>
+    """
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
