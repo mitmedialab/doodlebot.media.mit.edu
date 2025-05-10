@@ -152,7 +152,7 @@
                     })
                     const webrtcJson = await webrtcResponse.json();
                     popup?.postMessage(`fetchResponse---webrtc---${JSON.stringify(webrtcJson)}`, playgroundURL);
-                } else if (type == "chat") {
+                } else if (type == "file_upload") {
                     const url = data.split("---")[2];
         //             const payload = {
         //     filename: file.name,
@@ -163,7 +163,7 @@
                     const fileData = base64ToUint8Array(payload.content);
                     const file = new File([fileData], payload.filename, { type: payload.mimeType });
                     const formData = new FormData();
-                    formData.append("audio_file", file);
+                    formData.append("file", file);
                     const response = await fetch(url, {
                         method: "POST",
                         body: formData,
@@ -171,6 +171,7 @@
                     if (!response.ok) {
                         const errorText = await response.text();
                         console.log("Error response:", errorText);
+                        popup?.postMessage(`fetchResponse---${url}---Error: ` + errorText, playgroundURL);
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
 
@@ -184,7 +185,7 @@
                     const audio = new Audio(audioUrl);
                     const array = await blob.arrayBuffer();
                     const base64 = uint8ArrayToBase64(new Uint8Array(array));
-                    popup?.postMessage(`fetchResponse---${url}---${base64}`, playgroundURL);
+                    popup?.postMessage(`fetchResponse---${url}---ok`, playgroundURL);
                 } else {
                     const url = data.split("---")[2];
                     console.log(`Fetching URL: ${url}`);
@@ -203,7 +204,7 @@
                         popup?.postMessage(`fetchResponse---${url}---${text}`, playgroundURL);
                     } catch (error: any) {
                         console.error("Fetch error:", error);
-                        popup?.postMessage("fetchResponse---Error: " + error.message, playgroundURL);
+                        popup?.postMessage(`fetchResponse---${url}---Error: ` + error.message, playgroundURL);
                     }
                 }
             }
