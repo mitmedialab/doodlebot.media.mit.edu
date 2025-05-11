@@ -118,7 +118,8 @@
 
         await waitForPopupToRespond();
 
-        function base64ToUint8Array(base64: string): Uint8Array {
+        function base64ToUint8Array(dataUrl: string): Uint8Array {
+            const base64 = dataUrl.split(',')[1];
             const binaryString = atob(base64);
             const len = binaryString.length;
             const bytes = new Uint8Array(len);
@@ -160,6 +161,8 @@
         //     mimeType: blob.type,
         //   };
                     const payload = JSON.parse(data.split("---")[3]);
+                    console.log(payload);
+                    console.log(payload.content);
                     const fileData = base64ToUint8Array(payload.content);
                     const file = new File([fileData], payload.filename, { type: payload.mimeType });
                     const formData = new FormData();
