@@ -409,6 +409,21 @@ async def viseme_events():
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.websocket("/ws/viseme_event")
+async def viseme_event_socket(websocket: WebSocket):
+    await websocket.accept()
+    queue = asyncio.Queue()
+    listeners.append(queue)
+
+    try:
+        while True:
+            data = await queue.get()
+            await websocket.send_text(data)
+    except Exception as e:
+        print("WebSocket closed:", e)
+    finally:
+        listeners.remove(queue)
+
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
 async def mjpeg_viewer(ip_address: str):
