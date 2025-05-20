@@ -42,6 +42,17 @@ openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 azure_speech_key = os.getenv('AZURE_SPEECH_KEY')
 azure_service_region = os.getenv('AZURE_SPEECH_REGION')
 
+# Set up logger (configure once at module level)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # You can change to INFO in production
+
+# Make sure a handler is attached (use only once in your main setup if needed)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
 
 class VoiceAssistantError(Exception):
     """Custom exception for Voice Assistant errors"""
@@ -184,10 +195,13 @@ class VoiceAssistant:
     
     async def synthesize_speech(self, text: str) -> str:
         """Convert text to speech using Azure and emit viseme events"""
+        logger.debug("Starting speech synthesis for text: %s", text)
+
         try:
             output_path = os.path.join(self.temp_dir, "response.wav")
-            audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+            logger.debug("Output path set to: %s", output_path)
 
+            audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
             synthesizer = speechsdk.SpeechSynthesizer(
                 speech_config=self.speech_config,
                 audio_config=audio_config
@@ -199,18 +213,25 @@ class VoiceAssistant:
                 viseme_id = evt.viseme_id
                 offset_ms = evt.audio_offset / 10000
                 animation = getattr(evt, "animation", None)
-                loop.create_task(send_viseme_event(viseme_id, offset_ms, animation))
+                logger.debug("Viseme received - ID: %s, Offset(ms): %s, Animation: %s",
+                             viseme_id, offset_ms, animation)
+                loop.create_task(self._send_viseme(viseme_id, offset_ms, animation))
 
             synthesizer.viseme_received.connect(on_viseme_received)
+            logger.debug("Viseme event listener connected")
 
+            logger.debug("Calling Azure TTS speak_text_async")
             result = await asyncio.to_thread(synthesizer.speak_text_async(text).get)
 
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                logger.info("Speech synthesis completed successfully")
                 return output_path
             else:
+                logger.error("Speech synthesis failed: %s", result.reason)
                 raise VoiceAssistantError("Speech synthesis failed")
 
         except Exception as e:
+            logger.exception("Exception during speech synthesis")
             raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
 
     async def _send_viseme(self, viseme_id, offset_ms, animation=None):
@@ -219,8 +240,14 @@ class VoiceAssistant:
             "offsetMs": offset_ms,
             "animation": animation,
         })
-        for queue in listeners:
-            await queue.put(data)
+        logger.debug("Sending viseme data to listeners: %s", data)
+
+        for i, queue in enumerate(listeners):
+            try:
+                await queue.put(data)
+                logger.debug("Viseme sent to listener %d", i)
+            except Exception as e:
+                logger.error("Failed to send viseme to listener %d: %s", i, e)
     
     # def synthesize_speech(self, text: str) -> str:
     #     loop = asyncio.get_event_loop()
