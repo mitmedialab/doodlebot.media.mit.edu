@@ -16,9 +16,11 @@ import os
 from dotenv import load_dotenv
 from functools import wraps
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 
 # Load environment variables
 load_dotenv()
+listeners: List[asyncio.Queue] = []
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -179,18 +181,29 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
+    
     async def synthesize_speech(self, text: str) -> str:
-        """Convert text to speech using Azure"""
+        """Convert text to speech using Azure and emit viseme events"""
         try:
             output_path = os.path.join(self.temp_dir, "response.wav")
-            audio_config = speechsdk.audio.AudioOutputConfig(
-                filename=output_path)
+            audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+
             synthesizer = speechsdk.SpeechSynthesizer(
                 speech_config=self.speech_config,
                 audio_config=audio_config
             )
 
-            result = synthesizer.speak_text_async(text).get()
+            loop = asyncio.get_event_loop()
+
+            def on_viseme_received(evt):
+                viseme_id = evt.viseme_id
+                offset_ms = evt.audio_offset / 10000
+                animation = getattr(evt, "animation", None)
+                loop.create_task(send_viseme_event(viseme_id, offset_ms, animation))
+
+            synthesizer.viseme_received.connect(on_viseme_received)
+
+            result = await asyncio.to_thread(synthesizer.speak_text_async(text).get)
 
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 return output_path
@@ -199,6 +212,36 @@ class VoiceAssistant:
 
         except Exception as e:
             raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+    async def _send_viseme(self, viseme_id, offset_ms, animation=None):
+        data = json.dumps({
+            "visemeId": viseme_id,
+            "offsetMs": offset_ms,
+            "animation": animation,
+        })
+        for queue in listeners:
+            await queue.put(data)
+    
+    # def synthesize_speech(self, text: str) -> str:
+    #     loop = asyncio.get_event_loop()
+
+    #     def viseme_callback(evt):
+    #         viseme_id = evt.viseme_id
+    #         offset_ms = evt.audio_offset / 10000
+    #         animation = getattr(evt, "animation", None)
+    #         loop.create_task(self._send_viseme(viseme_id, offset_ms, animation))
+
+    #     self.synthesizer.viseme_received.connect(viseme_callback)
+
+    #     result = self.synthesizer.speak_text_async(text).get()
+
+    #     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+    #         temp_path = tempfile.mktemp(suffix=".wav")
+    #         with open(temp_path, "wb") as f:
+    #             f.write(result.audio_data)
+    #         return temp_path
+    #     else:
+    #         raise RuntimeError("Speech synthesis failed")
 
     async def process_voice_input(self, audio_data: bytes = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
@@ -321,20 +364,23 @@ async def mjpeg_proxy_stream(ip_address: str):
             async for data, _ in resp.content.iter_chunks():
                 yield data
 
-VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
 
-@app.get("/proxy/video_feed")
-async def proxy_video_feed():
+@app.get("/viseme-events")
+async def viseme_events():
+    queue = asyncio.Queue()
+    listeners.append(queue)
 
-    async def video_stream():
-        async with httpx.AsyncClient() as client:
-            async with client.stream("GET", VIDEO_FEED_URL, timeout=None) as response:
-                async for chunk in response.aiter_bytes():
-                    print("sending...")
-                    yield chunk
-                    await asyncio.sleep(0.001)
+    async def event_generator():
+        try:
+            while True:
+                data = await queue.get()
+                yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            listeners.remove(queue)
 
-    return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
