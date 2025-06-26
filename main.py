@@ -365,6 +365,26 @@ async def mjpeg_viewer(ip_address: str):
     </html>
     """
 
+VOICE_MAP = {
+    1: "en-US-AnaNeural",
+    2: "en-US-AndrewMultilingualNeural",
+    3: "en-US-AvaNeural",  # or use AvaMultilingualNeural if preferred
+    4: "en-US-BlueNeural",
+    5: "en-US-BrianMultilingualNeural",
+    6: "en-US-CoraMultilingualNeural",
+    7: "en-US-LewisMultilingualNeural",
+    8: "en-US-EmmaNeural"
+}
+
+# Pitch map function (converts int to SSML pitch string)
+def map_pitch_value(pitch_int: int) -> str:
+    if pitch_int == 0:
+        return "default"
+    elif pitch_int > 0:
+        return f"+{pitch_int * 5}%"  # 5% per step up
+    else:
+        return f"{pitch_int * 5}%"
+
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
 async def chat_endpoint(audio_file: UploadFile = File(None)):
@@ -398,12 +418,19 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
 @app.post("/settings")
-async def update_settings(input_data: SettingsInput):
-    if input_data.voice:
-        settings.voice = input_data.voice
-    if input_data.pitch:
-        settings.pitch = input_data.pitch
-    return {"message": "Settings updated", "voice": settings.voice, "pitch": settings.pitch}
+async def update_settings(
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=None, description="Pitch adjustment (-5 to +5 or so)")
+):
+    if voice is not None and voice in VOICE_MAP:
+        settings.voice_id = voice
+    if pitch is not None:
+        settings.pitch_value = pitch
+    return {
+        "message": "Settings updated",
+        "voice": settings.voice,
+        "pitch": settings.pitch
+    }
 
 
 def get_static_directory(name: str):
