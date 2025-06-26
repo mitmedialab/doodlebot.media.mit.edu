@@ -316,9 +316,9 @@ async def speak_endpoint(input_data: TextInput):
     voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
     pitch_value = settings.pitch or 0
     if pitch_value == 0:
-        pitch_str = "default"
+        pitch_value = "default"
     else:
-        pitch_str = f"{pitch_value:+d}st"  # + sign added for positive numbers
+        pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
 
     try:
         audio_path = await assistant.synthesize_speech(input_data.text, voice=voice_value, pitch=pitch_value)
