@@ -302,7 +302,7 @@ async def repeat_after_me(audio_file: UploadFile = File(None)):
 async def speak_endpoint(input_data: TextInput):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
-    print("settings", settings)
+    print("settings", settings.voice)
     try:
         audio_path = await assistant.synthesize_speech(input_data.text, voice=settings.voice, pitch=settings.pitch)
 
