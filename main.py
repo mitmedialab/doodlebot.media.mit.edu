@@ -186,6 +186,7 @@ class VoiceAssistant:
             raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
     async def synthesize_speech(self, text: str, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> str:
+        print("voice", voice)
         output_path = os.path.join(self.temp_dir, "response.wav")
         audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
         speech_config = speechsdk.SpeechConfig(subscription=self.speech_config.subscription_key, region=self.speech_config.region)
