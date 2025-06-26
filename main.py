@@ -69,12 +69,6 @@ def handle_errors(func):
                 status_code=500, detail=f"Internal server error: {str(e)}")
     return wrapper
 
-class VoiceAssistantSettings:
-    def __init__(self):
-        self.voice = 1
-        self.pitch = 0
-
-settings = VoiceAssistantSettings()
 
 class VoiceAssistant:
     def __init__(self):
@@ -270,12 +264,6 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
-class SettingsInput(BaseModel):
-    voice: Optional[str] = None
-    pitch: Optional[str] = None
-
-
-
 @app.post("/repeat_after_me")
 @handle_errors
 async def repeat_after_me(audio_file: UploadFile = File(None), voice: int = Query(default=None, description="Voice ID (1-8)"),
@@ -445,22 +433,6 @@ async def chat_endpoint(
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
-
-@app.post("/settings")
-async def update_settings(
-    voice: int = Query(default=None, description="Voice ID (1-8)"),
-    pitch: int = Query(default=None, description="Pitch adjustment (-5 to +5 or so)")
-):
-    if voice is not None and voice in VOICE_MAP:
-        settings.voice = voice
-    if pitch is not None:
-        settings.pitch = pitch
-    return {
-        "message": "Settings updated",
-        "voice": settings.voice,
-        "pitch": settings.pitch
-    }
-
 
 def get_static_directory(name: str):
     return os.path.join(os.getcwd(), name)
