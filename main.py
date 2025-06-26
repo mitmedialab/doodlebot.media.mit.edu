@@ -284,8 +284,13 @@ async def repeat_after_me(audio_file: UploadFile = File(None)):
         audio_data = None
         if audio_file:
             audio_data = await audio_file.read()
-        
-        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=settings.voice, pitch=settings.pitch)
+        voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
+        pitch_value = settings.pitch or 0
+        if pitch_value == 0:
+            pitch_value = "default"
+        else:
+            pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -405,8 +410,12 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
 
-        voice_value = VOICE_MAP.get(settings.voice_id, "en-US-AnaNeural")
-        pitch_value = f"{pitch_value}st" if pitch_value != 0 else "default"
+        voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
+        pitch_value = settings.pitch or 0
+        if pitch_value == 0:
+            pitch_value = "default"
+        else:
+            pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
 
         response_text, audio_path = await assistant.process_voice_input(audio_data, voice=voice_value, pitch=pitch_value)
 
