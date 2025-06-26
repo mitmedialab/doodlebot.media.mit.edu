@@ -313,8 +313,8 @@ async def speak_endpoint(input_data: TextInput):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
     print("settings", settings.voice)
-    voice_value = VOICE_MAP.get(settings.voice_id, "en-US-AnaNeural")
-    pitch_value = settings.pitch_value or 0
+    voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
+    pitch_value = settings.pitch or 0
     pitch_value = f"{pitch_value}st" if pitch_value != 0 else "default"
     try:
         audio_path = await assistant.synthesize_speech(input_data.text, voice=voice_value, pitch=pitch_value)
@@ -432,9 +432,9 @@ async def update_settings(
     pitch: int = Query(default=None, description="Pitch adjustment (-5 to +5 or so)")
 ):
     if voice is not None and voice in VOICE_MAP:
-        settings.voice_id = voice
+        settings.voice = voice
     if pitch is not None:
-        settings.pitch_value = pitch
+        settings.pitch = pitch
     return {
         "message": "Settings updated",
         "voice": settings.voice,
