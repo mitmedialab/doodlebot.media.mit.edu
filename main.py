@@ -40,6 +40,16 @@ openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 azure_speech_key = os.getenv('AZURE_SPEECH_KEY')
 azure_service_region = os.getenv('AZURE_SPEECH_REGION')
 
+VOICE_MAP = {
+    1: "en-US-AnaNeural",
+    2: "en-US-AndrewMultilingualNeural",
+    3: "en-US-AvaNeural",  # or use AvaMultilingualNeural if preferred
+    4: "en-US-BlueNeural",
+    5: "en-US-BrianMultilingualNeural",
+    6: "en-US-CoraMultilingualNeural",
+    7: "en-US-LewisMultilingualNeural",
+    8: "en-US-EmmaNeural"
+}
 
 class VoiceAssistantError(Exception):
     """Custom exception for Voice Assistant errors"""
@@ -61,8 +71,8 @@ def handle_errors(func):
 
 class VoiceAssistantSettings:
     def __init__(self):
-        self.voice = "en-US-AnaNeural"
-        self.pitch = "default"
+        self.voice = 1
+        self.pitch = 0
 
 settings = VoiceAssistantSettings()
 
@@ -303,8 +313,10 @@ async def speak_endpoint(input_data: TextInput):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
     print("settings", settings.voice)
+    voice_value = VOICE_MAP.get(settings.voice_id, "en-US-AnaNeural")
+    pitch_value = f"{pitch_value}st" if pitch_value != 0 else "default"
     try:
-        audio_path = await assistant.synthesize_speech(input_data.text, voice=settings.voice, pitch=settings.pitch)
+        audio_path = await assistant.synthesize_speech(input_data.text, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -367,16 +379,7 @@ async def mjpeg_viewer(ip_address: str):
     </html>
     """
 
-VOICE_MAP = {
-    1: "en-US-AnaNeural",
-    2: "en-US-AndrewMultilingualNeural",
-    3: "en-US-AvaNeural",  # or use AvaMultilingualNeural if preferred
-    4: "en-US-BlueNeural",
-    5: "en-US-BrianMultilingualNeural",
-    6: "en-US-CoraMultilingualNeural",
-    7: "en-US-LewisMultilingualNeural",
-    8: "en-US-EmmaNeural"
-}
+
 
 # Pitch map function (converts int to SSML pitch string)
 def map_pitch_value(pitch_int: int) -> str:
@@ -397,7 +400,10 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
 
-        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=settings.voice, pitch=settings.pitch)
+        voice_value = VOICE_MAP.get(settings.voice_id, "en-US-AnaNeural")
+        pitch_value = f"{pitch_value}st" if pitch_value != 0 else "default"
+
+        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
