@@ -59,6 +59,12 @@ def handle_errors(func):
                 status_code=500, detail=f"Internal server error: {str(e)}")
     return wrapper
 
+class VoiceAssistantSettings:
+    def __init__(self):
+        self.voice = "en-US-AnaNeural"
+        self.pitch = "default"
+
+settings = VoiceAssistantSettings()
 
 class VoiceAssistant:
     def __init__(self):
@@ -179,28 +185,34 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
-    async def synthesize_speech(self, text: str) -> str:
-        """Convert text to speech using Azure"""
-        try:
-            output_path = os.path.join(self.temp_dir, "response.wav")
-            audio_config = speechsdk.audio.AudioOutputConfig(
-                filename=output_path)
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=self.speech_config,
-                audio_config=audio_config
-            )
+    async def synthesize_speech(self, text: str, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> str:
+        output_path = os.path.join(self.temp_dir, "response.wav")
+        audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+        speech_config = speechsdk.SpeechConfig(subscription=self.speech_config.subscription_key, region=self.speech_config.region)
+        speech_config.speech_synthesis_voice_name = voice
+        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
 
-            result = synthesizer.speak_text_async(text).get()
+        prosody_attrs = f'pitch="{pitch}"'
+        if rate:
+            prosody_attrs += f' rate="{rate}"'
 
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                return output_path
-            else:
-                raise VoiceAssistantError("Speech synthesis failed")
+        ssml = f"""
+        <speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\"
+               xmlns:mstts=\"https://www.w3.org/2001/mstts\"
+               xml:lang=\"en-US\">
+            <voice name=\"{voice}\">
+                <prosody {prosody_attrs}>{text}</prosody>
+            </voice>
+        </speak>
+        """
 
-        except Exception as e:
-            raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+        result = synthesizer.speak_ssml_async(ssml).get()
+        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+            return output_path
+        else:
+            raise VoiceAssistantError("Speech synthesis failed")
 
-    async def process_voice_input(self, audio_data: bytes = None) -> tuple[str, str]:
+    async def process_voice_input(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
             if audio_data is None:
@@ -208,21 +220,21 @@ class VoiceAssistant:
 
             transcript = await self.transcribe_audio(audio_data)
             response_text = await self.get_chat_response(transcript)
-            audio_path = await self.synthesize_speech(response_text)
+            audio_path = await self.synthesize_speech(response_text, voice, pitch, rate)
 
             return response_text, audio_path
 
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
 
-    async def process_voice_input_chat(self, audio_data: bytes = None) -> tuple[str, str]:
+    async def process_voice_input_chat(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
             if audio_data is None:
                 audio_data = await self.record_audio()
 
             transcript = await self.transcribe_audio(audio_data)
-            audio_path = await self.synthesize_speech(transcript)
+            audio_path = await self.synthesize_speech(transcript, voice, pitch, rate)
 
             return transcript, audio_path
 
@@ -247,6 +259,12 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
+class SettingsInput(BaseModel):
+    voice: Optional[str] = None
+    pitch: Optional[str] = None
+
+
+
 @app.post("/repeat_after_me")
 @handle_errors
 async def repeat_after_me(audio_file: UploadFile = File(None)):
@@ -256,7 +274,7 @@ async def repeat_after_me(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
         
-        response_text, audio_path = await assistant.process_voice_input_chat(audio_data)
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=settings.voice, pitch=settings.pitch)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -284,7 +302,7 @@ async def speak_endpoint(input_data: TextInput):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
     try:
-        audio_path = await assistant.synthesize_speech(input_data.text)
+        audio_path = await assistant.synthesize_speech(input_data.text, voice=settings.voice, pitch=settings.pitch)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -357,7 +375,7 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
 
-        response_text, audio_path = await assistant.process_voice_input(audio_data)
+        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=settings.voice, pitch=settings.pitch)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -378,6 +396,14 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
+
+@app.post("/settings")
+async def update_settings(input_data: SettingsInput):
+    if input_data.voice:
+        settings.voice = input_data.voice
+    if input_data.pitch:
+        settings.pitch = input_data.pitch
+    return {"message": "Settings updated", "voice": settings.voice, "pitch": settings.pitch}
 
 
 def get_static_directory(name: str):
