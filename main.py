@@ -278,14 +278,15 @@ class SettingsInput(BaseModel):
 
 @app.post("/repeat_after_me")
 @handle_errors
-async def repeat_after_me(audio_file: UploadFile = File(None)):
+async def repeat_after_me(audio_file: UploadFile = File(None), voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
     assistant = VoiceAssistant()
     try:
         audio_data = None
         if audio_file:
             audio_data = await audio_file.read()
-        voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
-        pitch_value = settings.pitch or 0
+        voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+        pitch_value = pitch or 0
         if pitch_value == 0:
             pitch_value = "default"
         else:
@@ -314,12 +315,14 @@ async def repeat_after_me(audio_file: UploadFile = File(None)):
 
 @app.post("/speak")
 @handle_errors
-async def speak_endpoint(input_data: TextInput):
+async def speak_endpoint(input_data: TextInput, 
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
-    print("settings", settings.voice)
-    voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
-    pitch_value = settings.pitch or 0
+
+    voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+    pitch_value = pitch or 0
     if pitch_value == 0:
         pitch_value = "default"
     else:
@@ -402,7 +405,11 @@ def map_pitch_value(pitch_int: int) -> str:
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
-async def chat_endpoint(audio_file: UploadFile = File(None)):
+async def chat_endpoint(
+    audio_file: UploadFile = File(None), 
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")
+    ):
     """Process voice input and return response"""
     assistant = VoiceAssistant()
     try:
@@ -410,8 +417,8 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
 
-        voice_value = VOICE_MAP.get(settings.voice, "en-US-AnaNeural")
-        pitch_value = settings.pitch or 0
+        voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+        pitch_value = pitch or 0
         if pitch_value == 0:
             pitch_value = "default"
         else:
