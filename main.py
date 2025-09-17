@@ -24,9 +24,9 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8602", "http://doodlebot.media.mit.edu"],  # Allows all origins
+    allow_origins=["http://localhost:8602", "http://doodlebot.media.mit.edu", "https://playground.raise.mit.edu"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["GET", "POST"],  # Allows all methods
+    allow_methods=["GET", "POST", "OPTIONS"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
 
