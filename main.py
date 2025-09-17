@@ -228,6 +228,50 @@ class TextInput(BaseModel):
     text: str
 
 
+@app.post("/get-ephemeral")
+async def get_ephemeral_key():
+    """
+    Create an ephemeral OpenAI Realtime session and return the ephemeral key.
+    """
+    base_url = "https://api.openai.com/v1/realtime/sessions"
+    model = "gpt-4o-realtime-preview-2024-12"  # your chosen model
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                base_url,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model
+                },
+                timeout=10.0
+            )
+
+        response.raise_for_status()
+        data = response.json()
+        # ephemeral key is at data['client_secret']['value']
+        ephemeral_key = data.get("client_secret", {}).get("value")
+
+        if not ephemeral_key:
+            return JSONResponse(status_code=500, content={"error": "Failed to get ephemeral key"})
+
+        return {"client_secret": {"value": ephemeral_key}}
+
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            status_code=e.response.status_code,
+            content={"error": f"OpenAI API error: {e.response.text}"}
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Unexpected error: {str(e)}"}
+        )
+
+
 @app.post("/speak")
 @handle_errors
 async def speak_endpoint(input_data: TextInput):
