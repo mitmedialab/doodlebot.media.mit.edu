@@ -231,6 +231,19 @@ class VoiceAssistant:
 
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
+    
+    async def get_text(self, audio_data: bytes = None) -> str:
+        """Process voice input and return response text and audio file path"""
+        try:
+            if audio_data is None:
+                audio_data = await self.record_audio()
+
+            transcript = await self.transcribe_audio(audio_data)
+
+            return transcript
+
+        except Exception as e:
+            raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
 
     async def process_voice_input_chat(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
@@ -473,6 +486,29 @@ async def chat_endpoint(
             headers={"text-response": response_text},
             filename="response.wav"
         )
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
+
+@app.post("/get-text")
+@handle_errors
+async def gettext_endpoint(
+    audio_file: UploadFile = File(None), 
+    ):
+    """Process voice input and return response"""
+    assistant = VoiceAssistant()
+    try:
+        audio_data = None
+        if audio_file:
+            audio_data = await audio_file.read()
+
+
+        response_text = await assistant.get_text(audio_data)
+
+        assistant.cleanup()
+
+        return response_text
     except Exception as e:
         if assistant:
             assistant.cleanup()
