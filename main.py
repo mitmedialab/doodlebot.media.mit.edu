@@ -320,7 +320,7 @@ async def get_ephemeral_key():
     Create an ephemeral OpenAI Realtime session and return the ephemeral key.
     """
     base_url = "https://api.openai.com/v1/realtime/sessions"
-    model = "gpt-4o-realtime-preview-2024-12"  # your chosen model
+    model = "gpt-realtime"  # your chosen model
 
     try:
         async with httpx.AsyncClient() as client:
