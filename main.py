@@ -1,5 +1,8 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+import httpx
+import aiohttp
+import logging
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
@@ -7,6 +10,7 @@ import azure.cognitiveservices.speech as speechsdk
 from openai import OpenAI
 import pyaudio
 import wave
+import asyncio
 import tempfile
 import os
 from dotenv import load_dotenv
@@ -35,6 +39,16 @@ openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 azure_speech_key = os.getenv('AZURE_SPEECH_KEY')
 azure_service_region = os.getenv('AZURE_SPEECH_REGION')
 
+VOICE_MAP = {
+    1: "en-US-AnaNeural",
+    2: "en-US-AndrewMultilingualNeural",
+    3: "en-US-AvaNeural",  # or use AvaMultilingualNeural if preferred
+    4: "en-US-BlueNeural",
+    5: "en-US-BrianMultilingualNeural",
+    6: "en-US-CoraMultilingualNeural",
+    7: "en-US-LewisMultilingualNeural",
+    8: "en-US-EmmaNeural"
+}
 
 class VoiceAssistantError(Exception):
     """Custom exception for Voice Assistant errors"""
@@ -174,28 +188,35 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
-    async def synthesize_speech(self, text: str) -> str:
-        """Convert text to speech using Azure"""
-        try:
-            output_path = os.path.join(self.temp_dir, "response.wav")
-            audio_config = speechsdk.audio.AudioOutputConfig(
-                filename=output_path)
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=self.speech_config,
-                audio_config=audio_config
-            )
+    async def synthesize_speech(self, text: str, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> str:
+        print("voice", voice)
+        output_path = os.path.join(self.temp_dir, "response.wav")
+        audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+        speech_config = speechsdk.SpeechConfig(subscription=self.speech_config.subscription_key, region=self.speech_config.region)
+        speech_config.speech_synthesis_voice_name = voice
+        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
 
-            result = synthesizer.speak_text_async(text).get()
+        prosody_attrs = f'pitch="{pitch}"'
+        if rate:
+            prosody_attrs += f' rate="{rate}"'
 
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                return output_path
-            else:
-                raise VoiceAssistantError("Speech synthesis failed")
+        ssml = f"""
+        <speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\"
+               xmlns:mstts=\"https://www.w3.org/2001/mstts\"
+               xml:lang=\"en-US\">
+            <voice name=\"{voice}\">
+                <prosody {prosody_attrs}>{text}</prosody>
+            </voice>
+        </speak>
+        """
 
-        except Exception as e:
-            raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+        result = synthesizer.speak_ssml_async(ssml).get()
+        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+            return output_path
+        else:
+            raise VoiceAssistantError("Speech synthesis failed")
 
-    async def process_voice_input(self, audio_data: bytes = None) -> tuple[str, str]:
+    async def process_voice_input(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
             if audio_data is None:
@@ -203,12 +224,27 @@ class VoiceAssistant:
 
             transcript = await self.transcribe_audio(audio_data)
             response_text = await self.get_chat_response(transcript)
-            audio_path = await self.synthesize_speech(response_text)
+            audio_path = await self.synthesize_speech(response_text, voice, pitch, rate)
 
             return response_text, audio_path
 
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
+
+    async def process_voice_input_chat(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
+        """Process voice input and return response text and audio file path"""
+        try:
+            if audio_data is None:
+                audio_data = await self.record_audio()
+
+            transcript = await self.transcribe_audio(audio_data)
+            audio_path = await self.synthesize_speech(transcript, voice, pitch, rate)
+
+            return transcript, audio_path
+
+        except Exception as e:
+            raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
+        
 
     def cleanup(self):
         """Clean up temporary files"""
@@ -350,11 +386,21 @@ async def get_ephemeral_key():
 
 @app.post("/speak")
 @handle_errors
-async def speak_endpoint(input_data: TextInput):
+async def speak_endpoint(input_data: TextInput, 
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
+
+    voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+    pitch_value = pitch or 0
+    if pitch_value == 0:
+        pitch_value = "default"
+    else:
+        pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
+
     try:
-        audio_path = await assistant.synthesize_speech(input_data.text)
+        audio_path = await assistant.synthesize_speech(input_data.text, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -381,10 +427,60 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
+async def mjpeg_proxy_stream(ip_address: str):
+    stream_url = f"http://{ip_address}:8000/video_feed"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(stream_url) as resp:
+            if resp.status != 200:
+                raise Exception(f"Failed to fetch stream: {resp.status}")
+            
+            async for data, _ in resp.content.iter_chunks():
+                yield data
+
+VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
+
+@app.get("/proxy/video_feed")
+async def proxy_video_feed():
+
+    async def video_stream():
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", VIDEO_FEED_URL, timeout=None) as response:
+                async for chunk in response.aiter_bytes():
+                    print("sending...")
+                    yield chunk
+                    await asyncio.sleep(0.001)
+
+    return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/mjpeg-viewer", response_class=HTMLResponse)
+async def mjpeg_viewer(ip_address: str):
+    return f"""
+    <html>
+      <body style="margin: 0;">
+        <img src="http://{ip_address}:8000/video_feed" style="width: 100%;" />
+      </body>
+    </html>
+    """
+
+
+
+# Pitch map function (converts int to SSML pitch string)
+def map_pitch_value(pitch_int: int) -> str:
+    if pitch_int == 0:
+        return "default"
+    elif pitch_int > 0:
+        return f"+{pitch_int * 5}%"  # 5% per step up
+    else:
+        return f"{pitch_int * 5}%"
 
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
-async def chat_endpoint(audio_file: UploadFile = File(None)):
+async def chat_endpoint(
+    audio_file: UploadFile = File(None), 
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")
+    ):
     """Process voice input and return response"""
     assistant = VoiceAssistant()
     try:
@@ -392,7 +488,14 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if audio_file:
             audio_data = await audio_file.read()
 
-        response_text, audio_path = await assistant.process_voice_input(audio_data)
+        voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+        pitch_value = pitch or 0
+        if pitch_value == 0:
+            pitch_value = "default"
+        else:
+            pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
+
+        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
@@ -413,7 +516,6 @@ async def chat_endpoint(audio_file: UploadFile = File(None)):
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
-
 
 def get_static_directory(name: str):
     return os.path.join(os.getcwd(), name)
