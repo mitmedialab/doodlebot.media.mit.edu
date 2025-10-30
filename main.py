@@ -287,7 +287,9 @@ async def listen(audio_file: UploadFile = File(None)):
 
 @app.post("/prompt")
 @handle_errors
-async def prompt(text_input: str):
+async def prompt(request: Request):
+    data = await request.json()
+    text_input = data.get("text_input")
     assistant = VoiceAssistant()
     try:
         response_text = await assistant.get_chat_response(text_input)
