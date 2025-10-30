@@ -227,6 +227,124 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
+@app.post("/repeat_after_me")
+@handle_errors
+async def repeat_after_me(audio_file: UploadFile = File(None), voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
+    assistant = VoiceAssistant()
+    try:
+        audio_data = None
+        if audio_file:
+            audio_data = await audio_file.read()
+        voice_value = VOICE_MAP.get(voice, "en-US-AnaNeural")
+        pitch_value = pitch or 0
+        if pitch_value == 0:
+            pitch_value = "default"
+        else:
+            pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=voice_value, pitch=pitch_value)
+
+        with open(audio_path, 'rb') as f:
+            audio_content = f.read()
+
+        assistant.cleanup()
+
+        temp_response_path = tempfile.mktemp(suffix='.wav')
+        with open(temp_response_path, 'wb') as f:
+            f.write(audio_content)
+
+        return FileResponse(
+            path=temp_response_path,
+            media_type="audio/wav",
+            headers={"text-response": response_text},
+            filename="response.wav"
+        )
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+@app.post("/listen")
+@handle_errors
+async def listen(audio_file: UploadFile = File(None)):
+    assistant = VoiceAssistant()
+    try:
+        audio_data = None
+        if audio_file:
+            audio_data = await audio_file.read()
+
+        response_text = await assistant.transcribe_audio(audio_data)
+
+        assistant.cleanup()
+
+        # Return just the text response
+        return {"text": response_text}
+        
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+@app.post("/prompt")
+@handle_errors
+async def prompt(text_input: str):
+    assistant = VoiceAssistant()
+    try:
+        response_text = await assistant.get_chat_response(text_input)
+
+        assistant.cleanup()
+
+        # Return just the text response
+        return {"text": response_text}
+        
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+@app.post("/get-ephemeral")
+async def get_ephemeral_key():
+    """
+    Create an ephemeral OpenAI Realtime session and return the ephemeral key.
+    """
+    base_url = "https://api.openai.com/v1/realtime/sessions"
+    model = "gpt-realtime"  # your chosen model
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                base_url,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model
+                },
+                timeout=10.0
+            )
+
+        response.raise_for_status()
+        data = response.json()
+        # ephemeral key is at data['client_secret']['value']
+        ephemeral_key = data.get("client_secret", {}).get("value")
+
+        if not ephemeral_key:
+            return JSONResponse(status_code=500, content={"error": "Failed to get ephemeral key"})
+
+        return {"client_secret": {"value": ephemeral_key}}
+
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            status_code=e.response.status_code,
+            content={"error": f"OpenAI API error: {e.response.text}"}
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Unexpected error: {str(e)}"}
+        )
+
 
 @app.post("/speak")
 @handle_errors
