@@ -125,7 +125,7 @@ class VoiceAssistant:
 
     
     async def createDalleImage(self, input: str) -> str:
-        response = client.responses.create(
+        response = self.openai_client.responses.create(
             model="gpt-4.1-mini",
             input="Generate an image of gray tabby cat hugging an otter with an orange scarf",
             tools=[{"type": "image_generation"}],
