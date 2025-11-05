@@ -128,7 +128,7 @@ class VoiceAssistant:
         response = self.openai_client.images.generate(
            model="dall-e-3",
             prompt=input,
-            size="512x512",  # smaller sizes = faster responses
+            size="1024x1024",  # smaller sizes = faster responses
             quality="standard",
             n=1
         )
