@@ -131,7 +131,6 @@ class VoiceAssistant:
             tools=[{"type": "image_generation"}],
         )
 
-        // Save the image to a file
         image_data = [
             output.result
             for output in response.output
