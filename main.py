@@ -353,7 +353,7 @@ async def createImage(request: Request):
     text_input = data.get("text_input")
     assistant = VoiceAssistant()
     try:
-        image_base64 = await assistant.createDalleImage(input)
+        image_base64 = await assistant.createDalleImage(text_input)
 
         assistant.cleanup()
 
