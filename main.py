@@ -131,14 +131,19 @@ class VoiceAssistant:
             tools=[{"type": "image_generation"}],
         )
 
+        print("response", response)
+
         image_data = [
             output.result
             for output in response.output
             if output.type == "image_generation_call"
         ]
 
+        print("image_data", image_data)
+
         if image_data:
             image_base64 = image_data[0]
+            print("image_base64", image_base64)
             return image_base64
         else:
             return None
