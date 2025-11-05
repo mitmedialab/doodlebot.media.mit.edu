@@ -135,11 +135,7 @@ class VoiceAssistant:
 
         print("response", response)
 
-        image_data = [
-            output.result
-            for output in response.output
-            if output.type == "image_generation_call"
-        ]
+        image_data = response.data[0].b64_json
 
         print("image_data", image_data)
 
