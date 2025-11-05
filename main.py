@@ -130,6 +130,7 @@ class VoiceAssistant:
             prompt=input,
             size="1024x1024",  # smaller sizes = faster responses
             quality="standard",
+            response_format="b64_json",
             n=1
         )
 
