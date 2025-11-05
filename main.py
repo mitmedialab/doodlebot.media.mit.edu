@@ -126,9 +126,9 @@ class VoiceAssistant:
     
     async def createDalleImage(self, input: str) -> str:
         response = self.openai_client.responses.create(
-            model="gpt-4.1-mini",
-            input=input,
-            tools=[{"type": "image_generation"}],
+           model="dall-e-3",
+            prompt=input,
+            size="512x512"  # smaller sizes = faster responses
         )
 
         print("response", response)
