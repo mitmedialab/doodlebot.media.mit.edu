@@ -123,6 +123,27 @@ class VoiceAssistant:
             stream.close()
             p.terminate()
 
+    
+    async def createDalleImage(self, input: str) -> str:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input="Generate an image of gray tabby cat hugging an otter with an orange scarf",
+            tools=[{"type": "image_generation"}],
+        )
+
+        // Save the image to a file
+        image_data = [
+            output.result
+            for output in response.output
+            if output.type == "image_generation_call"
+        ]
+
+        if image_data:
+            image_base64 = image_data[0]
+            return image_base64
+        else:
+            return None
+    
     async def transcribe_audio(self, audio_bytes: bytes) -> str:
         """Convert speech to text using OpenAI Whisper"""
         try:
@@ -320,6 +341,25 @@ async def listen(audio_file: UploadFile = File(None)):
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
+
+@app.post("/create_image")
+@handle_errors
+async def createImage(request: Request):
+    data = await request.json()
+    text_input = data.get("text_input")
+    assistant = VoiceAssistant()
+    try:
+        image_base64 = await assistant.createDalleImage(input)
+
+        assistant.cleanup()
+
+        # Return just the text response
+        return {"image": image_base64}
+        
+    except Exception as e:
+        if assistant:
+            assistant.cleanup()
+        raise VoiceAssistantError(f"Image creation failed: {str(e)}")
 
 @app.post("/prompt")
 @handle_errors
