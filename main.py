@@ -140,9 +140,7 @@ class VoiceAssistant:
         print("image_data", image_data)
 
         if image_data:
-            image_base64 = image_data[0]
-            print("image_base64", image_base64)
-            return image_base64
+            return image_data
         else:
             return None
     
