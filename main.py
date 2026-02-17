@@ -538,7 +538,7 @@ async def chat_endpoint(
         else:
             pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
 
-        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=voice_value, pitch=pitch_value)
+        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=voice_value, pitch=pitch_value)
 
         with open(audio_path, 'rb') as f:
             audio_content = f.read()
