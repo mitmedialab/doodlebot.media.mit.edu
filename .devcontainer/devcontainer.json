@@ -1,0 +1,47 @@
+{
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "github.copilot",
+        "github.copilot-chat",
+        "ms-azuretools.vscode-docker",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter"
+      ],
+      "settings": {
+        "[markdown]": {
+          "editor.defaultFormatter": null
+        },
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "editor.formatOnSave": true,
+        "editor.tabSize": 2,
+        "python.analysis.typeCheckingMode": "standard",
+        "python.formatting.blackArgs": [
+          "--line-length=88"
+        ],
+        "python.formatting.provider": "black"
+      }
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+    "ghcr.io/devcontainers/features/git-lfs:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/python:latest": {
+      "version": "3.12"
+    },
+    "ghcr.io/guiyomh/features/vim:0": {},
+    "ghcr.io/pmalacho-mit/devcontainer-features/git-subrepo:latest": {}
+  },
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+  ],
+  "postCreateCommand": "sudo apt-get install -y inotify-tools && (grep -q 'IgnoreUnknown UseKeychain' ~/.ssh/config 2>/dev/null || sed -i '/UseKeychain/i IgnoreUnknown UseKeychain' ~/.ssh/config 2>/dev/null) && git config core.editor '/usr/bin/vim' && git config pull.rebase false && sudo curl -fsSL https://gist.githubusercontent.com/pmalacho-mit/d64caa8e16b0b0fdd5e58cc37a0ce242/raw/8f0f620d4a65f6f3d930ea14e7c2fdf382ef1bf1/codeblockify.sh -o /usr/local/bin/codeblockify && sudo chmod +x /usr/local/bin/codeblockify && curl -fsSL https://raw.githubusercontent.com/pmalacho-mit/devcontainers/refs/heads/main/src/difftastic/install.sh | sudo install -m 0755 /dev/stdin /usr/local/bin/difftastic && git config diff.external difftastic",
+  "workspaceFolder": "${localWorkspaceFolder}",
+  "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind"
+}
