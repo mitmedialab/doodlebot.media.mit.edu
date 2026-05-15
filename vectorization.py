@@ -33,8 +33,8 @@ def run_vectorization(image_array: np.ndarray):
         label_b="high_geometry.commands",
     )
     return {
-        "low_geometry_consolidated": _commands_to_jsonable(low_geometry.consolidated),
-        "high_geometry_commands": _commands_to_jsonable(high_geometry.commands),
+        "low_geometry": _commands_to_jsonable(low_geometry.consolidated),
+        "high_geometry": _commands_to_jsonable(high_geometry.commands),
         "svg": svg,
     }
 
