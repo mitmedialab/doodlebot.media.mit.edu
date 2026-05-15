@@ -20,7 +20,7 @@
         "editor.formatOnSave": true,
         "editor.tabSize": 2,
         "python.analysis.typeCheckingMode": "standard",
-        "python.formatting.blackArgs": [
+        "python.formatting.blackArgs": [do
           "--line-length=88"
         ],
         "python.formatting.provider": "black"
