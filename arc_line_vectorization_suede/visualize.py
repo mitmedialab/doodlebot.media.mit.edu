@@ -176,7 +176,7 @@ def _render_drawing_parts(
 
 def commands_to_svg(
     commands,
-    output_path,
+    output_path: Optional[str] = None,
     start_pos=(0.0, 0.0),
     start_heading=0.0,
     stroke_width=1.5,
@@ -214,15 +214,16 @@ def commands_to_svg(
     parts.append("</svg>")
 
     svg = "\n".join(parts)
-    with open(output_path, "w") as f:
-        f.write(svg)
+    if output_path is not None:
+        with open(output_path, "w") as f:
+            f.write(svg)
     return svg
 
 
 def commands_to_svg_compare(
     commands_a: Sequence[DrawingCommand],
     commands_b: Sequence[DrawingCommand],
-    output_path,
+    output_path: Optional[str] = None,
     label_a="A",
     label_b="B",
     start_pos=(0.0, 0.0),
@@ -309,8 +310,9 @@ def commands_to_svg_compare(
     parts.append("</svg>")
 
     svg = "\n".join(parts)
-    with open(output_path, "w") as f:
-        f.write(svg)
+    if output_path is not None:
+        with open(output_path, "w") as f:
+            f.write(svg)
     return svg
 
 

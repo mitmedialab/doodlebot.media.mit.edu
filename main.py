@@ -505,21 +505,12 @@ def _commands_to_jsonable(commands):
 
 def _run_vectorization(image_array: np.ndarray):
     _, _, _, low_geometry, high_geometry = default_pipeline(image_array)
-    with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        svg = commands_to_svg_compare(
-            low_geometry.consolidated,
-            high_geometry.commands,
-            tmp_path,
-            label_a="low_geometry.consolidated",
-            label_b="high_geometry.commands",
-        )
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+    svg = commands_to_svg_compare(
+        low_geometry.consolidated,
+        high_geometry.commands,
+        label_a="low_geometry.consolidated",
+        label_b="high_geometry.commands",
+    )
     return {
         "low_geometry_consolidated": _commands_to_jsonable(low_geometry.consolidated),
         "high_geometry_commands": _commands_to_jsonable(high_geometry.commands),
