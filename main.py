@@ -20,8 +20,7 @@ from dotenv import load_dotenv
 from functools import wraps
 from fastapi.middleware.cors import CORSMiddleware
 
-from arc_line_vectorization_suede import default_pipeline
-from arc_line_vectorization_suede.visualize import commands_to_svg_compare
+from vectorization import run_vectorization, VectorizationError
 
 # Load environment variables
 load_dotenv()
@@ -485,39 +484,6 @@ async def chat_endpoint(
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
 
-def _commands_to_jsonable(commands):
-    """Strip numpy scalar wrappers so DrawingCommand dicts serialize cleanly."""
-    out = []
-    for cmd in commands:
-        item = {}
-        for key, value in cmd.items():
-            if isinstance(value, np.bool_):
-                item[key] = bool(value)
-            elif isinstance(value, np.integer):
-                item[key] = int(value)
-            elif isinstance(value, np.floating):
-                item[key] = float(value)
-            else:
-                item[key] = value
-        out.append(item)
-    return out
-
-
-def _run_vectorization(image_array: np.ndarray):
-    _, _, _, low_geometry, high_geometry = default_pipeline(image_array)
-    svg = commands_to_svg_compare(
-        low_geometry.consolidated,
-        high_geometry.commands,
-        label_a="low_geometry.consolidated",
-        label_b="high_geometry.commands",
-    )
-    return {
-        "low_geometry_consolidated": _commands_to_jsonable(low_geometry.consolidated),
-        "high_geometry_commands": _commands_to_jsonable(high_geometry.commands),
-        "svg": svg,
-    }
-
-
 @app.post("/vectorize")
 @handle_errors
 async def vectorize_endpoint(image_file: UploadFile = File(...)):
@@ -528,14 +494,14 @@ async def vectorize_endpoint(image_file: UploadFile = File(...)):
     """
     image_bytes = await image_file.read()
     if not image_bytes:
-        raise VoiceAssistantError("Empty image upload")
+        raise VectorizationError("Empty image upload")
     try:
         pil_image = Image.open(io.BytesIO(image_bytes))
         pil_image.load()
     except Exception as e:
-        raise VoiceAssistantError(f"Could not decode image: {e}")
+        raise VectorizationError(f"Could not decode image: {e}")
     image_array = np.asarray(pil_image)
-    return await asyncio.to_thread(_run_vectorization, image_array)
+    return await asyncio.to_thread(run_vectorization, image_array)
 
 
 def get_static_directory(name: str):
