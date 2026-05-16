@@ -35,6 +35,8 @@ services:
     env_file:
       - path: ../.env
         required: false
+    networks:
+      - app-network
 
   caddy:
     container_name: doodlebot-caddy
