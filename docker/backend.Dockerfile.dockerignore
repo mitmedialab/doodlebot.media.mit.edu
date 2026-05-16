@@ -1,6 +1,7 @@
 cli
 docker
 frontend
+.devcontainer
 
 # Tests
 **/__tests__/

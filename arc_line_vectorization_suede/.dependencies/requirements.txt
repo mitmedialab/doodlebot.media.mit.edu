@@ -1,0 +1,5 @@
+networkx==3.6.1
+numpy==2.4.4
+pillow==12.2.0
+scikit-image==0.26.0
+scipy==1.17.1

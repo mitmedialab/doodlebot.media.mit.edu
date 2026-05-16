@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import httpx
 import aiohttp
+import io
 import logging
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 from typing import Optional
 import azure.cognitiveservices.speech as speechsdk
 from openai import OpenAI
+import numpy as np
+from PIL import Image
 import pyaudio
 import wave
 import asyncio
@@ -17,6 +20,8 @@ from dotenv import load_dotenv
 from functools import wraps
 from fastapi.middleware.cors import CORSMiddleware
 
+from vectorization import run_vectorization, VectorizationError
+
 # Load environment variables
 load_dotenv()
 
@@ -24,7 +29,7 @@ load_dotenv()
 app = FastAPI(
     title="Voice Assistant API",
     description="A voice assistant that converts speech to text, processes it, and returns synthesized speech",
-    version="1.0.0"
+    version="1.0.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -36,9 +41,9 @@ app.add_middleware(
 )
 
 # Initialize API clients
-openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-azure_speech_key = os.getenv('AZURE_SPEECH_KEY')
-azure_service_region = os.getenv('AZURE_SPEECH_REGION')
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+azure_speech_key = os.getenv("AZURE_SPEECH_KEY")
+azure_service_region = os.getenv("AZURE_SPEECH_REGION")
 
 VOICE_MAP = {
     1: "en-US-AnaNeural",
@@ -48,16 +53,19 @@ VOICE_MAP = {
     5: "en-US-BrianMultilingualNeural",
     6: "en-US-CoraMultilingualNeural",
     7: "en-US-LewisMultilingualNeural",
-    8: "en-US-EmmaNeural"
+    8: "en-US-EmmaNeural",
 }
+
 
 class VoiceAssistantError(Exception):
     """Custom exception for Voice Assistant errors"""
+
     pass
 
 
 def handle_errors(func):
     """Decorator for error handling"""
+
     @wraps(func)
     async def wrapper(*args, **kwargs):
         try:
@@ -66,7 +74,9 @@ def handle_errors(func):
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(
-                status_code=500, detail=f"Internal server error: {str(e)}")
+                status_code=500, detail=f"Internal server error: {str(e)}"
+            )
+
     return wrapper
 
 
@@ -74,10 +84,9 @@ class VoiceAssistant:
     def __init__(self):
         self.conversation_history = []
         self.temp_dir = tempfile.mkdtemp()
-        self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.speech_config = speechsdk.SpeechConfig(
-            subscription=azure_speech_key,
-            region=azure_service_region
+            subscription=azure_speech_key, region=azure_service_region
         )
         self.speech_config.speech_synthesis_voice_name = "en-US-AnaNeural"
 
@@ -98,7 +107,7 @@ class VoiceAssistant:
                 channels=self.CHANNELS,
                 rate=self.RATE,
                 input=True,
-                frames_per_buffer=self.CHUNK
+                frames_per_buffer=self.CHUNK,
             )
 
             frames = []
@@ -107,14 +116,14 @@ class VoiceAssistant:
                 frames.append(data)
 
             temp_path = os.path.join(self.temp_dir, "temp_recording.wav")
-            wf = wave.open(temp_path, 'wb')
+            wf = wave.open(temp_path, "wb")
             wf.setnchannels(self.CHANNELS)
             wf.setsampwidth(p.get_sample_size(self.FORMAT))
             wf.setframerate(self.RATE)
-            wf.writeframes(b''.join(frames))
+            wf.writeframes(b"".join(frames))
             wf.close()
 
-            with open(temp_path, 'rb') as audio_file:
+            with open(temp_path, "rb") as audio_file:
                 audio_bytes = audio_file.read()
 
             return audio_bytes
@@ -172,30 +181,42 @@ class VoiceAssistant:
 
             Your goal is to make learning interactive, thought-provoking, and fun. You always encourage creativity and exploration rather than just giving answers. Stay playful, supportive, and engaging—but always remember, you're a robot!
             """
-            self.conversation_history.append({"role": "system", "content": system_prompt})
+            self.conversation_history.append(
+                {"role": "system", "content": system_prompt}
+            )
             self.conversation_history.append({"role": "user", "content": text})
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=self.conversation_history,
-                max_tokens=150
+                model="gpt-4", messages=self.conversation_history, max_tokens=150
             )
 
             assistant_response = response.choices[0].message.content
             self.conversation_history.append(
-                {"role": "assistant", "content": assistant_response})
+                {"role": "assistant", "content": assistant_response}
+            )
 
             return assistant_response
         except Exception as e:
             raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
 
-    async def synthesize_speech(self, text: str, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> str:
+    async def synthesize_speech(
+        self,
+        text: str,
+        voice: str = "en-US-AnaNeural",
+        pitch: str = "default",
+        rate: Optional[str] = None,
+    ) -> str:
         print("voice", voice)
         output_path = os.path.join(self.temp_dir, "response.wav")
         audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
-        speech_config = speechsdk.SpeechConfig(subscription=self.speech_config.subscription_key, region=self.speech_config.region)
+        speech_config = speechsdk.SpeechConfig(
+            subscription=self.speech_config.subscription_key,
+            region=self.speech_config.region,
+        )
         speech_config.speech_synthesis_voice_name = voice
-        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
+        synthesizer = speechsdk.SpeechSynthesizer(
+            speech_config=speech_config, audio_config=audio_config
+        )
 
         prosody_attrs = f'pitch="{pitch}"'
         if rate:
@@ -217,7 +238,13 @@ class VoiceAssistant:
         else:
             raise VoiceAssistantError("Speech synthesis failed")
 
-    async def process_voice_input(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
+    async def process_voice_input(
+        self,
+        audio_data: bytes = None,
+        voice: str = "en-US-AnaNeural",
+        pitch: str = "default",
+        rate: Optional[str] = None,
+    ) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
             if audio_data is None:
@@ -232,7 +259,13 @@ class VoiceAssistant:
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
 
-    async def process_voice_input_chat(self, audio_data: bytes = None, voice: str = "en-US-AnaNeural", pitch: str = "default", rate: Optional[str] = None) -> tuple[str, str]:
+    async def process_voice_input_chat(
+        self,
+        audio_data: bytes = None,
+        voice: str = "en-US-AnaNeural",
+        pitch: str = "default",
+        rate: Optional[str] = None,
+    ) -> tuple[str, str]:
         """Process voice input and return response text and audio file path"""
         try:
             if audio_data is None:
@@ -245,11 +278,11 @@ class VoiceAssistant:
 
         except Exception as e:
             raise VoiceAssistantError(f"Voice processing failed: {str(e)}")
-        
 
     def cleanup(self):
         """Clean up temporary files"""
         import shutil
+
         try:
             shutil.rmtree(self.temp_dir)
         except Exception:
@@ -264,10 +297,14 @@ class ChatResponse(BaseModel):
 class TextInput(BaseModel):
     text: str
 
+
 @app.post("/repeat_after_me")
 @handle_errors
-async def repeat_after_me(audio_file: UploadFile = File(None), voice: int = Query(default=None, description="Voice ID (1-8)"),
-    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
+async def repeat_after_me(
+    audio_file: UploadFile = File(None),
+    voice: int = Query(default=None, description="Voice ID (1-8)"),
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)"),
+):
     assistant = VoiceAssistant()
     try:
         audio_data = None
@@ -279,33 +316,38 @@ async def repeat_after_me(audio_file: UploadFile = File(None), voice: int = Quer
             pitch_value = "default"
         else:
             pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
-        response_text, audio_path = await assistant.process_voice_input_chat(audio_data, voice=voice_value, pitch=pitch_value)
+        response_text, audio_path = await assistant.process_voice_input_chat(
+            audio_data, voice=voice_value, pitch=pitch_value
+        )
 
-        with open(audio_path, 'rb') as f:
+        with open(audio_path, "rb") as f:
             audio_content = f.read()
 
         assistant.cleanup()
 
-        temp_response_path = tempfile.mktemp(suffix='.wav')
-        with open(temp_response_path, 'wb') as f:
+        temp_response_path = tempfile.mktemp(suffix=".wav")
+        with open(temp_response_path, "wb") as f:
             f.write(audio_content)
 
         return FileResponse(
             path=temp_response_path,
             media_type="audio/wav",
             headers={"text-response": response_text},
-            filename="response.wav"
+            filename="response.wav",
         )
     except Exception as e:
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Speech synthesis failed: {str(e)}")
 
+
 @app.post("/speak")
 @handle_errors
-async def speak_endpoint(input_data: TextInput, 
+async def speak_endpoint(
+    input_data: TextInput,
     voice: int = Query(default=None, description="Voice ID (1-8)"),
-    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")):
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)"),
+):
     """Convert text to speech and return audio file"""
     assistant = VoiceAssistant()
 
@@ -317,21 +359,21 @@ async def speak_endpoint(input_data: TextInput,
         pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
 
     try:
-        audio_path = await assistant.synthesize_speech(input_data.text, voice=voice_value, pitch=pitch_value)
+        audio_path = await assistant.synthesize_speech(
+            input_data.text, voice=voice_value, pitch=pitch_value
+        )
 
-        with open(audio_path, 'rb') as f:
+        with open(audio_path, "rb") as f:
             audio_content = f.read()
 
         assistant.cleanup()
 
-        temp_response_path = tempfile.mktemp(suffix='.wav')
-        with open(temp_response_path, 'wb') as f:
+        temp_response_path = tempfile.mktemp(suffix=".wav")
+        with open(temp_response_path, "wb") as f:
             f.write(audio_content)
 
         return FileResponse(
-            path=temp_response_path,
-            media_type="audio/wav",
-            filename="speech.wav"
+            path=temp_response_path, media_type="audio/wav", filename="speech.wav"
         )
     except Exception as e:
         if assistant:
@@ -344,17 +386,20 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "Voice Assistant API is running"}
 
+
 async def mjpeg_proxy_stream(ip_address: str):
     stream_url = f"http://{ip_address}:8000/video_feed"
     async with aiohttp.ClientSession() as session:
         async with session.get(stream_url) as resp:
             if resp.status != 200:
                 raise Exception(f"Failed to fetch stream: {resp.status}")
-            
+
             async for data, _ in resp.content.iter_chunks():
                 yield data
 
+
 VIDEO_FEED_URL = "http://192.168.41.214:8000/video_feed"
+
 
 @app.get("/proxy/video_feed")
 async def proxy_video_feed():
@@ -367,7 +412,9 @@ async def proxy_video_feed():
                     yield chunk
                     await asyncio.sleep(0.001)
 
-    return StreamingResponse(video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        video_stream(), media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 
 @app.get("/mjpeg-viewer", response_class=HTMLResponse)
@@ -381,7 +428,6 @@ async def mjpeg_viewer(ip_address: str):
     """
 
 
-
 # Pitch map function (converts int to SSML pitch string)
 def map_pitch_value(pitch_int: int) -> str:
     if pitch_int == 0:
@@ -391,13 +437,14 @@ def map_pitch_value(pitch_int: int) -> str:
     else:
         return f"{pitch_int * 5}%"
 
+
 @app.post("/chat", response_model=ChatResponse)
 @handle_errors
 async def chat_endpoint(
-    audio_file: UploadFile = File(None), 
+    audio_file: UploadFile = File(None),
     voice: int = Query(default=None, description="Voice ID (1-8)"),
-    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)")
-    ):
+    pitch: int = Query(default=0, description="Pitch adjustment (e.g., -5 to +5)"),
+):
     """Process voice input and return response"""
     assistant = VoiceAssistant()
     try:
@@ -412,27 +459,50 @@ async def chat_endpoint(
         else:
             pitch_value = f"{pitch_value:+d}st"  # + sign added for positive numbers
 
-        response_text, audio_path = await assistant.process_voice_input(audio_data, voice=voice_value, pitch=pitch_value)
+        response_text, audio_path = await assistant.process_voice_input(
+            audio_data, voice=voice_value, pitch=pitch_value
+        )
 
-        with open(audio_path, 'rb') as f:
+        with open(audio_path, "rb") as f:
             audio_content = f.read()
 
         assistant.cleanup()
 
-        temp_response_path = tempfile.mktemp(suffix='.wav')
-        with open(temp_response_path, 'wb') as f:
+        temp_response_path = tempfile.mktemp(suffix=".wav")
+        with open(temp_response_path, "wb") as f:
             f.write(audio_content)
 
         return FileResponse(
             path=temp_response_path,
             media_type="audio/wav",
             headers={"text-response": response_text},
-            filename="response.wav"
+            filename="response.wav",
         )
     except Exception as e:
         if assistant:
             assistant.cleanup()
         raise VoiceAssistantError(f"Chat processing failed: {str(e)}")
+
+
+@app.post("/vectorize")
+@handle_errors
+async def vectorize_endpoint(image_file: UploadFile = File(...)):
+    """Vectorize an uploaded image into robot drawing commands.
+
+    Returns the low-geometry consolidated commands, the high-geometry
+    commands, and a side-by-side comparison SVG of the two.
+    """
+    image_bytes = await image_file.read()
+    if not image_bytes:
+        raise VectorizationError("Empty image upload")
+    try:
+        pil_image = Image.open(io.BytesIO(image_bytes))
+        pil_image.load()
+    except Exception as e:
+        raise VectorizationError(f"Could not decode image: {e}")
+    image_array = np.asarray(pil_image)
+    return await asyncio.to_thread(run_vectorization, image_array)
+
 
 def get_static_directory(name: str):
     return os.path.join(os.getcwd(), name)
@@ -441,8 +511,7 @@ def get_static_directory(name: str):
 def try_mount_static_html(app, name: str, prefix: str = "/"):
     directory = get_static_directory(name)
     if os.path.exists(directory):
-        app.mount(prefix, StaticFiles(
-            directory=directory, html=True), name=name)
+        app.mount(prefix, StaticFiles(directory=directory, html=True), name=name)
         print(f"Mounted {name} at {prefix}")
     else:
         print(f"Directory not found: {directory}")
@@ -452,4 +521,5 @@ try_mount_static_html(app, "frontend")
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
