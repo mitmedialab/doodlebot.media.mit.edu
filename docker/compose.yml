@@ -29,8 +29,6 @@ services:
     build:
       context: ..
       dockerfile: ./docker/backend.Dockerfile
-    ports:
-      - "8000:80"
     volumes:
       - "./.frontend:/app/frontend"
       - "./.playground:/app/frontend/playground"
