@@ -16,6 +16,14 @@ services:
       dockerfile: ./playground.Dockerfile
     restart: "no"
 
+  vectorization:
+    container_name: doodlebot-vectorization
+    build:
+      context: ..
+      dockerfile: ./vectorization/Dockerfile
+    networks:
+      - app-network
+
   backend:
     container_name: doodlebot-backend
     build:
@@ -29,8 +37,6 @@ services:
     env_file:
       - path: ../.env
         required: false
-    networks:
-      - app-network
 
   caddy:
     container_name: doodlebot-caddy

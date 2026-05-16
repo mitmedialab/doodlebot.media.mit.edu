@@ -1,7 +1,16 @@
+(routes) {
+    handle_path /vectorize* {
+        reverse_proxy vectorization:80
+    }
+    handle {
+        reverse_proxy backend:80
+    }
+}
+
 doodlebot.media.mit.edu {
-    reverse_proxy backend:80
+    import routes
 }
 
 http://doodlebot.media.mit.edu {
-    reverse_proxy backend:80
+    import routes
 }
