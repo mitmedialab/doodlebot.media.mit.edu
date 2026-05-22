@@ -46,16 +46,18 @@ def _commands_to_jsonable(commands: Sequence[DrawingCommand]):
 
 
 def run_vectorization(image_array: np.ndarray):
-    _, _, _, low_geometry, high_geometry = default_pipeline(image_array)
+    _, _, _, _, _, low_geometry_optimized, high_geometry_optimized = default_pipeline(
+        image_array
+    )
     svg = commands_to_svg_compare(
-        low_geometry.consolidated,
-        high_geometry.commands,
-        label_a="low_geometry.consolidated",
-        label_b="high_geometry.commands",
+        low_geometry_optimized.commands,
+        high_geometry_optimized.commands,
+        label_a="low_geometry_optimized.commands",
+        label_b="high_geometry_optimized.commands",
     )
     return {
-        "low_geometry": _commands_to_jsonable(low_geometry.consolidated),
-        "high_geometry": _commands_to_jsonable(high_geometry.commands),
+        "low_geometry": _commands_to_jsonable(low_geometry_optimized.commands),
+        "high_geometry": _commands_to_jsonable(high_geometry_optimized.commands),
         "svg": svg,
     }
 
