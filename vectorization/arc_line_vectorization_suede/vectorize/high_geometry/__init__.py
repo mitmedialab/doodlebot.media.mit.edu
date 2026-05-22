@@ -596,9 +596,10 @@ class Vectorize:
             start_heading=start_heading,
         )
 
-        self.consolidated, self.report = consolidate_commands(
-            self.commands,
-            start_pos=start_pos,
-            start_heading=start_heading,
-            config=consolidate,
-        )
+        # opt for low geometry consolidation by default since it's better
+        # self.consolidated, self.report = consolidate_commands(
+        #     self.commands,
+        #     start_pos=start_pos,
+        #     start_heading=start_heading,
+        #     config=consolidate,
+        # )

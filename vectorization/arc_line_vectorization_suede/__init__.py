@@ -128,7 +128,7 @@ def default_pipeline(source: ImageSource):
     )
 
     optimized_high_geometry = OptimizeRoute(
-        high_geometry.consolidated,
+        high_geometry.commands,
         start_pos=start_pos,
         start_heading=start_heading,
         cfg=OptimizeRoute.Config.Optimize(
