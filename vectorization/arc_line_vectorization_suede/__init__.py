@@ -3,6 +3,7 @@ from .segment import Segment
 from .graph import StrokeGraph
 from .vectorize.low_geometry import Vectorize as LowGeometryVectorize
 from .vectorize.high_geometry import Vectorize as HighGeometryVectorize
+from .optimize import OptimizeRoute
 from .commands import DrawingCommand
 
 import numpy as np
@@ -113,4 +114,38 @@ def default_pipeline(source: ImageSource):
         ),
     )
 
-    return skeleton, segment, graph, low_geometry, high_geometry
+    optimized_low_geometry = OptimizeRoute(
+        low_geometry.consolidated,
+        start_pos=start_pos,
+        start_heading=start_heading,
+        cfg=OptimizeRoute.Config.Optimize(
+            pixels_per_inch=1.0,
+            pen_up_join_tol=0.5,
+            two_opt_passes=16,
+            or_opt_passes=8,
+            or_opt_max_segment_len=3,
+        ),
+    )
+
+    optimized_high_geometry = OptimizeRoute(
+        high_geometry.consolidated,
+        start_pos=start_pos,
+        start_heading=start_heading,
+        cfg=OptimizeRoute.Config.Optimize(
+            pixels_per_inch=1.0,
+            pen_up_join_tol=0.5,
+            two_opt_passes=16,
+            or_opt_passes=8,
+            or_opt_max_segment_len=3,
+        ),
+    )
+
+    return (
+        skeleton,
+        segment,
+        graph,
+        low_geometry,
+        high_geometry,
+        optimized_low_geometry,
+        optimized_high_geometry,
+    )
