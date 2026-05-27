@@ -11,6 +11,13 @@ from .crossings import (
     detect_crossings,
     resolve_crossings,
 )
+from .eyes import (
+    EyeDetectConfig,
+    EyeDetectResult,
+    detect_filled_regions,
+    resolve_filled_regions,
+)
+from .labeling import label_skeleton_pixels
 
 from typing import Literal, TypedDict, NamedTuple, Union
 
@@ -72,17 +79,30 @@ class Skeletonize:
       2. skeletonize -> self.skeletonized
       3. collapse_small_holes -> self.collapsed
             (fixes thin double-pixel artifacts from Lee thinning)
-      4. detect_crossings -> self.detection
+      4. detect_filled_regions -> self.eye_detection
+            (finds filled-in shapes whose medial-axis collapsed to a
+            tiny pixel cluster — pupils, drawn dots — that segmentation
+            would otherwise drop or mis-handle)
+      5. resolve_filled_regions -> self.eyes_resolved
+            (replaces each filled region's interior skeleton with its
+            1-pixel outer boundary, so segmentation traces a clean loop)
+      6. detect_crossings -> self.detection
             (identifies ribbon-collapse regions in the binary; uses
-            the cleaned skeleton from stage 3 so arm endpoints land
-            on actual cleaned-skeleton pixels for downstream resolution)
-      5. resolve_crossings -> self.uncrossed
+            the eye-resolved skeleton so arm endpoints land on actual
+            surviving skeleton pixels for downstream resolution)
+      7. resolve_crossings -> self.uncrossed
             (rewrites each detected ribbon collapse: erases the merged
             skeleton segment and replaces it with two straight lines
             between paired arm endpoints, restoring two non-intersecting
             paths through the crossing)
+      8. label_skeleton_pixels -> self.labeling
+            (assigns every binary pixel to the single most appropriate
+            pixel of ``self.uncrossed`` via geodesic flooding through
+            the stroke mask — the lookup that lets downstream stages
+            trace each pixel of the original image to its skeleton
+            ancestor; -1 for pixels outside the stroke mask)
 
-    The final output for downstream consumption is `self.uncrossed`.
+    The final skeleton for downstream consumption is `self.uncrossed`.
     Earlier stages are kept on the instance so visualization / debug
     can compare them.
     """
@@ -97,6 +117,9 @@ class Skeletonize:
         class Collapse(CollapseConfig):
             pass
 
+        class Eyes(EyeDetectConfig):
+            pass
+
         class Detect(DetectConfig):
             pass
 
@@ -104,8 +127,11 @@ class Skeletonize:
         binary: NDArray[np.bool_]
         skeletonized: NDArray[np.bool_]
         collapsed: NDArray[np.bool_]
+        eye_detection: EyeDetectResult
+        eyes_resolved: NDArray[np.bool_]
         detection: DetectResult
         uncrossed: NDArray[np.bool_]
+        labeling: NDArray[np.int32]
 
     def __init__(
         self,
@@ -113,25 +139,43 @@ class Skeletonize:
         binarize_config: Config.Binarize,
         skeletonize_config: Config.Skeletonize,
         collapse_config: Config.Collapse,
+        eyes_config: Config.Eyes,
         detect_config: Config.Detect,
     ):
         self.binary = to_binary(source, binarize_config)
         self.skeletonized = skeletonize(self.binary, skeletonize_config)
         self.collapsed = collapse_small_holes(self.skeletonized, collapse_config)
-        # Detection uses the BINARY for its distance-transform analysis
-        # but is given the CLEANED skeleton so arm endpoints land on
-        # pixels that will survive the resolver's edits.
-        self.detection = detect_crossings(
-            self.binary, detect_config, skel=self.collapsed
+        # Eye detection runs against the binary using the cleaned
+        # skeleton as the "is there a real stroke here" reference.
+        # We resolve detected fills BEFORE crossing detection so that
+        # crossing detection sees the same skeleton the rest of the
+        # pipeline does.
+        self.eye_detection = detect_filled_regions(
+            self.binary, self.collapsed, eyes_config
         )
-        # Resolution rewrites the cleaned skeleton in place at every
-        # detected crossing.
-        self.uncrossed = resolve_crossings(self.collapsed, self.detection)
+        self.eyes_resolved = resolve_filled_regions(
+            self.collapsed, self.eye_detection
+        )
+        # Detection uses the BINARY for its distance-transform analysis
+        # but is given the EYE-RESOLVED skeleton so arm endpoints land
+        # on pixels that will survive the resolver's edits.
+        self.detection = detect_crossings(
+            self.binary, detect_config, skel=self.eyes_resolved
+        )
+        # Resolution rewrites the eye-resolved skeleton in place at
+        # every detected crossing.
+        self.uncrossed = resolve_crossings(self.eyes_resolved, self.detection)
+        # Per-pixel labeling — every binary pixel gets the flat index
+        # of its associated final-skeleton pixel; -1 outside the stroke.
+        self.labeling = label_skeleton_pixels(self.binary, self.uncrossed)
 
         self.output = self.Output(
             binary=self.binary,
             skeletonized=self.skeletonized,
             collapsed=self.collapsed,
+            eye_detection=self.eye_detection,
+            eyes_resolved=self.eyes_resolved,
             detection=self.detection,
             uncrossed=self.uncrossed,
+            labeling=self.labeling,
         )

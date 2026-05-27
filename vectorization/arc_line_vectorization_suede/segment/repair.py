@@ -446,6 +446,26 @@ class RepairConfig(TypedDict):
     junction-affected region can grow on each side). Default 8.
     """
 
+    cascade_gap: int
+    """
+    Two repairs on the same polyline are merged into one when their
+    junction-affected index ranges are within this many polyline
+    indices of each other (and their junction points are within
+    ``cascade_max_jp_distance`` — see ``_merge_cascade_repairs``).
+    This is an index gap, not a pixel distance, so it does NOT scale
+    with stroke width. Default 3.
+    """
+
+    cascade_max_jp_distance: float
+    """
+    Distance guard (pixels) for cascade merging: two adjacent repairs
+    are only merged when their solved junction points are within this
+    distance, so a polyline threading two physically distinct
+    junctions is not collapsed into one averaged point. A pixel
+    distance — scales with stroke width. Default ~3 px at the
+    reference scale.
+    """
+
 
 def repair_junctions(polylines, config: RepairConfig):
     if not polylines:
@@ -547,9 +567,19 @@ def repair_junctions(polylines, config: RepairConfig):
         for pi, (rs, re) in poly_to_region.items():
             per_poly_repairs[pi].append((rs, re, jp))
     repaired = []
+    cascade_gap = int(config.get("cascade_gap", 3))
+    cascade_max_jp = float(config.get("cascade_max_jp_distance", 3.0))
     for pi, poly in enumerate(polylines):
         raw = per_poly_repairs[pi]
-        merged = _merge_cascade_repairs(raw, cascade_gap=3) if len(raw) >= 2 else raw
+        merged = (
+            _merge_cascade_repairs(
+                raw,
+                cascade_gap=cascade_gap,
+                max_jp_distance=cascade_max_jp,
+            )
+            if len(raw) >= 2
+            else raw
+        )
         new_poly = _apply_repairs(
             poly, merged, interp_max_spacing=config["interp_max_spacing"]
         )

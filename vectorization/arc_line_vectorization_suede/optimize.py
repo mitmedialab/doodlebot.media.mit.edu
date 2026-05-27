@@ -1,5 +1,14 @@
 """Time-optimal re-ordering of an existing drawing-command sequence.
 
+This is the REQUIRED final stage of the pipeline. The vectorizers and
+``routing.py`` produce a command stream that is pen-up-minimal but not
+time-minimal (the Eulerian router does not optimize in-place turning,
+which is a large share of firmware draw time). This stage closes that
+gap, and is what makes the low-geometry output reliably beat the naive
+high-geometry baseline. Its contract is "never worse than the input":
+it seeds local search from both a nearest-neighbour tour and the input
+ordering, and falls back to the untouched input if neither wins.
+
 Takes any ``List[DrawingCommand]`` (low or high geometry output), pulls
 out each pen-down primitive (a ``line`` with ``penDown=True`` or an
 ``arc``), and re-sequences them to minimize total wall-clock drawing
@@ -453,6 +462,13 @@ def _vec_line_time_with(
 # ---------------------------------------------------------------------------
 
 
+# When True, every incremental delta computed by ``_two_opt`` / ``_or_opt``
+# is cross-checked against a full ``_tour_cost_cached`` recompute. Kept off
+# in normal operation (it defeats the point of the incremental delta); flip
+# to True to validate the delta math after touching the cost model.
+_VERIFY_DELTAS = False
+
+
 @dataclass
 class _Tour:
     order: List[int]  # primitive indices in visit order
@@ -482,6 +498,40 @@ def _tour_cost_cached(tour: _Tour, cache: _CostCache) -> float:
         rb = 1 if reverse[k + 1] else 0
         total += float(trans[a, ra, b, rb])
     return total + cache.draw_sum
+
+
+def _edge_cost(
+    cache: _CostCache,
+    prev: Optional[Tuple[int, int]],
+    node: Tuple[int, int],
+    is_first: bool,
+) -> float:
+    """Cost of the directed edge entering ``node`` (a ``(prim, dir)``
+    pair). If ``is_first`` the edge comes from the robot start state
+    (``trans_start``); otherwise from ``prev``.
+
+    The cost-cache transition matrix has a reverse-traversal symmetry
+    that the incremental 2-opt / or-opt deltas below rely on:
+
+        trans[a, ra, b, rb] == trans[b, 1-rb, a, 1-ra]
+
+    i.e. reversing a directed edge and flipping both endpoints' traversal
+    directions leaves the transition cost unchanged. (Provable from
+    ``_build_cost_cache``: entry/exit pose of the flipped traversal is
+    the other endpoint's pose with heading rotated by pi; the gap vector
+    negates, gap distance is invariant, and every spin magnitude is
+    invariant under the simultaneous pi-rotation of both headings.)
+
+    Consequence: when a 2-opt move reverses a tour slice (and flips the
+    direction of every primitive in it), the *internal* transitions of
+    that slice keep their cost — only the two boundary transitions
+    change. Same for an or-opt segment relocation. That is what makes
+    the delta O(1) instead of O(n).
+    """
+    if is_first:
+        return float(cache.trans_start[node[0], node[1]])
+    assert prev is not None
+    return float(cache.trans[prev[0], prev[1], node[0], node[1]])
 
 
 def _nearest_neighbor(cache: _CostCache, n: int) -> _Tour:
@@ -523,31 +573,63 @@ def _two_opt(
     """2-opt with segment reversal. Reversing the slice ``tour[i..j]``
     also flips the direction of every primitive in the slice — that's
     how direction is searched here.
+
+    Each candidate move is evaluated by an O(1) incremental delta: the
+    reversal preserves the cost of every transition *inside* the slice
+    (see ``_edge_cost`` for why), so only the two boundary transitions
+    — the edge entering position ``i`` and the edge leaving position
+    ``j`` — change. Total work per pass is O(n^2) move evaluations,
+    each O(1), instead of O(n^3).
     """
     n = len(tour.order)
     if n < 3:
         return tour
-    best = tour.copy()
-    best_cost = _tour_cost_cached(best, cache)
+    order = list(tour.order)
+    rev = [1 if x else 0 for x in tour.reverse]
+
     for _ in range(max_passes):
         improved = False
         for i in range(n - 1):
             for j in range(i + 1, n):
-                candidate_order = best.order.copy()
-                candidate_reverse = best.reverse.copy()
-                candidate_order[i : j + 1] = list(reversed(candidate_order[i : j + 1]))
-                candidate_reverse[i : j + 1] = [
-                    not r for r in reversed(candidate_reverse[i : j + 1])
-                ]
-                candidate = _Tour(candidate_order, candidate_reverse)
-                c = _tour_cost_cached(candidate, cache)
-                if c + 1e-9 < best_cost:
-                    best = candidate
-                    best_cost = c
+                oi, ri = order[i], rev[i]
+                oj, rj = order[j], rev[j]
+                # Boundary edge entering position i.
+                if i == 0:
+                    old_enter = _edge_cost(cache, None, (oi, ri), True)
+                    new_enter = _edge_cost(cache, None, (oj, 1 - rj), True)
+                else:
+                    prev = (order[i - 1], rev[i - 1])
+                    old_enter = _edge_cost(cache, prev, (oi, ri), False)
+                    new_enter = _edge_cost(cache, prev, (oj, 1 - rj), False)
+                # Boundary edge leaving position j.
+                if j == n - 1:
+                    old_leave = 0.0
+                    new_leave = 0.0
+                else:
+                    succ = (order[j + 1], rev[j + 1])
+                    old_leave = _edge_cost(cache, (oj, rj), succ, False)
+                    new_leave = _edge_cost(cache, (oi, 1 - ri), succ, False)
+                delta = (new_enter + new_leave) - (old_enter + old_leave)
+                if delta < -1e-9:
+                    if _VERIFY_DELTAS:
+                        before = _tour_cost_cached(
+                            _Tour(order, [bool(x) for x in rev]), cache
+                        )
+                    order[i : j + 1] = order[i : j + 1][::-1]
+                    seg = rev[i : j + 1]
+                    rev[i : j + 1] = [1 - x for x in reversed(seg)]
+                    if _VERIFY_DELTAS:
+                        after = _tour_cost_cached(
+                            _Tour(order, [bool(x) for x in rev]), cache
+                        )
+                        assert abs((after - before) - delta) < 1e-6, (
+                            f"2-opt delta mismatch: predicted {delta}, "
+                            f"actual {after - before}"
+                        )
                     improved = True
         if not improved:
             break
-    return best
+    return _Tour(order, [bool(x) for x in rev])
 
 
 def _or_opt(
@@ -558,47 +640,123 @@ def _or_opt(
 ) -> _Tour:
     """Or-opt: relocate a short consecutive run, optionally flipped.
     Catches moves 2-opt can't represent.
+
+    Like ``_two_opt`` this uses an O(1) incremental delta per candidate.
+    Removing a segment destroys its two incident transitions and adds a
+    closure transition; reinserting it splits one transition and adds
+    two. The segment's internal transitions are cost-invariant under the
+    optional flip (``_edge_cost``), so they cancel and never enter the
+    delta. Per pass: O(seg_len * n^2) instead of O(seg_len * n^3).
     """
     n = len(tour.order)
     if n < 4:
         return tour
-    best = tour.copy()
-    best_cost = _tour_cost_cached(best, cache)
+    order = list(tour.order)
+    rev = [1 if x else 0 for x in tour.reverse]
+
     for _ in range(max_passes):
         improved = False
         for seg_len in range(1, max_segment_len + 1):
-            for i in range(n - seg_len + 1):
-                segment_order = best.order[i : i + seg_len]
-                segment_reverse = best.reverse[i : i + seg_len]
-                remaining_order = best.order[:i] + best.order[i + seg_len :]
-                remaining_reverse = best.reverse[:i] + best.reverse[i + seg_len :]
-                for j in range(len(remaining_order) + 1):
+            i = 0
+            while i + seg_len <= n:
+                # Segment B[i .. i+seg_len-1]; pre/post are its
+                # neighbours in the current tour.
+                pre = (order[i - 1], rev[i - 1]) if i > 0 else None
+                has_post = i + seg_len < n
+                post = (
+                    (order[i + seg_len], rev[i + seg_len])
+                    if has_post
+                    else None
+                )
+                seg_nodes = [
+                    (order[i + k], rev[i + k]) for k in range(seg_len)
+                ]
+                # Remaining tour (segment cut out).
+                rem = (
+                    [(order[k], rev[k]) for k in range(i)]
+                    + [(order[k], rev[k]) for k in range(i + seg_len, n)]
+                )
+                m = len(rem)
+
+                # Edges destroyed by the cut, and the closure edge that
+                # heals the gap in the remaining tour.
+                d1 = _edge_cost(cache, pre, seg_nodes[0], i == 0)
+                d2 = (
+                    _edge_cost(cache, seg_nodes[-1], post, False)
+                    if post is not None
+                    else 0.0
+                )
+                g_close = (
+                    _edge_cost(cache, pre, post, pre is None)
+                    if post is not None
+                    else 0.0
+                )
+
+                best_delta = -1e-9
+                best_move: Optional[Tuple[int, bool]] = None
+                for g in range(m + 1):
+                    rg_prev = rem[g - 1] if g > 0 else None
+                    rg = rem[g] if g < m else None
+                    r_split = (
+                        _edge_cost(cache, rg_prev, rg, g == 0)
+                        if rg is not None
+                        else 0.0
+                    )
                     for flip in (False, True):
                         if flip:
-                            new_seg_order = list(reversed(segment_order))
-                            new_seg_reverse = [not r for r in reversed(segment_reverse)]
+                            seg_first = (
+                                seg_nodes[-1][0],
+                                1 - seg_nodes[-1][1],
+                            )
+                            seg_last = (
+                                seg_nodes[0][0],
+                                1 - seg_nodes[0][1],
+                            )
                         else:
-                            new_seg_order = segment_order
-                            new_seg_reverse = segment_reverse
-                        candidate = _Tour(
-                            remaining_order[:j] + new_seg_order + remaining_order[j:],
-                            remaining_reverse[:j]
-                            + new_seg_reverse
-                            + remaining_reverse[j:],
+                            seg_first = seg_nodes[0]
+                            seg_last = seg_nodes[-1]
+                        a1 = _edge_cost(cache, rg_prev, seg_first, g == 0)
+                        a2 = (
+                            _edge_cost(cache, seg_last, rg, False)
+                            if rg is not None
+                            else 0.0
                         )
-                        if (
-                            candidate.order == best.order
-                            and candidate.reverse == best.reverse
-                        ):
-                            continue
-                        c = _tour_cost_cached(candidate, cache)
-                        if c + 1e-9 < best_cost:
-                            best = candidate
-                            best_cost = c
-                            improved = True
+                        delta = (g_close + a1 + a2) - (d1 + d2 + r_split)
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_move = (g, flip)
+
+                if best_move is not None:
+                    g, flip = best_move
+                    if flip:
+                        seg_out = [
+                            (p, 1 - r) for (p, r) in reversed(seg_nodes)
+                        ]
+                    else:
+                        seg_out = list(seg_nodes)
+                    new_nodes = rem[:g] + seg_out + rem[g:]
+                    if _VERIFY_DELTAS:
+                        before = _tour_cost_cached(
+                            _Tour(order, [bool(x) for x in rev]), cache
+                        )
+                    order = [p for (p, _) in new_nodes]
+                    rev = [r for (_, r) in new_nodes]
+                    if _VERIFY_DELTAS:
+                        after = _tour_cost_cached(
+                            _Tour(order, [bool(x) for x in rev]), cache
+                        )
+                        assert abs((after - before) - best_delta) < 1e-6, (
+                            f"or-opt delta mismatch: predicted {best_delta}, "
+                            f"actual {after - before}"
+                        )
+                    improved = True
+                    # Tour mutated; rescan this seg_len from the start.
+                    i = 0
+                    continue
+                i += 1
         if not improved:
             break
-    return best
+    return _Tour(order, [bool(x) for x in rev])
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +841,7 @@ class OptimizeRoute:
 
     Args:
         commands: the command sequence to optimize (e.g.
-            ``LowGeometryVectorize(...).consolidated`` or
+            ``LowGeometryVectorize(...).commands_consolidated`` or
             ``HighGeometryVectorize(...).commands``).
         start_pos: robot's starting position in image coordinates. MUST
             match the start used when generating the input commands.
@@ -738,8 +896,10 @@ class OptimizeRoute:
             self.commands: List[DrawingCommand] = list(self.input_commands)
             self.estimated_time_after = self.estimated_time_before
             self.tour: List[Tuple[int, bool]] = []
+            self.improved = False
             return
 
+        n = len(primitives)
         cache = _build_cost_cache(
             primitives,
             self.start_pos,
@@ -747,26 +907,63 @@ class OptimizeRoute:
             self.pixels_per_inch,
             self.pen_up_join_tol,
         )
-        initial = _nearest_neighbor(cache, len(primitives))
-        after_2opt = _two_opt(initial, cache, max_passes=self.two_opt_passes)
-        after_or_opt = _or_opt(
-            after_2opt,
-            cache,
-            max_segment_len=self.or_opt_max_segment_len,
-            max_passes=self.or_opt_passes,
-        )
+
+        # Local search is seeded from TWO starting tours and the best
+        # result is kept:
+        #   1. a nearest-neighbour greedy tour, and
+        #   2. the input ordering itself.
+        # ``_extract_primitives`` returns primitives in input order, all
+        # traversed forward, so ``_Tour(range(n), [False]*n)`` is exactly
+        # the order this optimizer was handed. Seeding from it guarantees
+        # 2-opt/or-opt can never converge to something worse than the
+        # input — without this seed, a nearest-neighbour start can land
+        # in a basin whose local optimum is slower than the (often
+        # already decent) Eulerian routing the input came from. This is
+        # the bug that made ``beachnugget`` regress by ~2%.
+        seeds = [
+            _nearest_neighbor(cache, n),
+            _Tour(list(range(n)), [False] * n),
+        ]
+        best_tour: Optional[_Tour] = None
+        best_cost = float("inf")
+        for seed in seeds:
+            t = _two_opt(seed, cache, max_passes=self.two_opt_passes)
+            t = _or_opt(
+                t,
+                cache,
+                max_segment_len=self.or_opt_max_segment_len,
+                max_passes=self.or_opt_passes,
+            )
+            c = _tour_cost_cached(t, cache)
+            if c < best_cost:
+                best_cost = c
+                best_tour = t
+        assert best_tour is not None
 
         self.commands = _emit_tour(
-            after_or_opt,
+            best_tour,
             primitives,
             self.start_pos,
             self.start_heading,
             self.pen_up_join_tol,
         )
-        self.tour = list(zip(after_or_opt.order, after_or_opt.reverse))
+        self.tour = list(zip(best_tour.order, best_tour.reverse))
         self.estimated_time_after = estimate_total_time(
             self.commands, self.pixels_per_inch
         )
+
+        # Final safety net: if the re-emitted tour still came out slower
+        # than the literal input command stream (possible when the input
+        # was already near-optimal and command re-emission introduced a
+        # rounding-scale difference), fall back to the input untouched.
+        # The optimizer's contract is "never worse than the input".
+        if self.estimated_time_after > self.estimated_time_before + 1e-9:
+            self.commands = list(self.input_commands)
+            self.estimated_time_after = self.estimated_time_before
+            self.tour = []
+            self.improved = False
+        else:
+            self.improved = self.estimated_time_after < self.estimated_time_before
 
     def stats(self) -> str:
         n_prim = len(self._primitives)

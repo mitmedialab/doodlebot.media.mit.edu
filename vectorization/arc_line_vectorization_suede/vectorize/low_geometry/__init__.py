@@ -22,8 +22,23 @@ Result fields:
 * ``self.primitives_fitted`` — primitives after the first solve.
 * ``self.soft_beautified`` — constraints augmented with beautification.
 * ``self.primitives_consolidated`` — primitives after second solve.
-* ``self.commands`` — robot commands from ``primitives_fitted``.
-* ``self.consolidated`` — robot commands from ``primitives_consolidated``.
+* ``self.commands_fitted`` — robot commands from ``primitives_fitted``.
+* ``self.commands_consolidated`` — robot commands from
+  ``primitives_consolidated``.
+
+The two command snapshots and the routing that feeds each:
+
+    snapshot                primitives                tour
+    ----------------------  ------------------------  --------------------
+    commands_fitted         primitives_fitted         tour
+    commands_consolidated   primitives_consolidated   tour_consolidated
+
+``commands_consolidated`` is the intended pipeline output (it reflects
+the beautification re-solve and arc-pair merging). ``commands_fitted``
+is the pre-beautification snapshot, kept for diagnostics. Neither is
+route-time-optimised — that is ``OptimizeRoute``'s job and is a
+required final stage (see ``routing.py``: the Eulerian router
+minimises pen-ups, not total turning).
 """
 
 from __future__ import annotations
@@ -39,7 +54,8 @@ from ...commands import DrawingCommand
 from ...graph import StrokeGraph
 
 from .beautify import BeautifyTolerances, detect, merge_arc_pairs, merge_into
-from .fitting import ChainPiece, fit_polyline
+from .fitting import ChainPiece, fit_polyline, fuse_chain, is_near_closed_polyline
+from .labels import CommandSpan, LabeledCommand, label_commands
 from .manifest import (
     Coincide,
     G1Smooth,
@@ -64,6 +80,7 @@ from .solve import (
     solve_once,
     _bbox_diag,
 )
+from ...segment.labels import LabeledSegment
 
 # ---------------------------------------------------------------------------
 # Public configuration (typed-dict form for parity with the rest of the
@@ -193,6 +210,7 @@ class Vectorize:
         solve: Optional[SolveDict] = None,
         beautify: Optional[BeautifyDict] = None,
         route: Optional[RouteDict] = None,
+        labeled_segments: Optional[Sequence[LabeledSegment]] = None,
     ):
         self.graph = graph
         self.start_pos = np.asarray(start_pos, dtype=float)
@@ -207,6 +225,13 @@ class Vectorize:
         )
         self.beautify_tols = _beautify_tols_from(beautify_clean)
         self.route_config = dict(route or {})
+        # Optional per-pixel raw-segment labels for the polylines this
+        # vectorizer was built against. When supplied, the command stream
+        # is annotated post-routing with which raw segments each drawing
+        # command pulled from — see ``labeled_commands_consolidated``.
+        self.input_labeled_segments: Optional[Sequence[LabeledSegment]] = (
+            labeled_segments
+        )
 
         self._run()
 
@@ -229,71 +254,117 @@ class Vectorize:
                 source_points[pid] = src
         self.source_points = source_points
 
-        # Phase 2: junction-derived constraints.
-        soft = build_junction_constraints(
-            self.graph,
-            self.fitted_segments,
-            smooth_junction_deg=self.fit_config.smooth_junction_deg_threshold,
-            primitives=self.primitives_initial,
-        )
-        # Add internal chain joint constraints. Coincide ALWAYS — we
-        # want consecutive primitives to share an endpoint. G1 ONLY
-        # when the joint is actually smooth: top-down splitting puts
-        # chain breakpoints at sharp corners (the apex of a cat ear,
-        # the cusp of a heart), where the two adjoining primitives
-        # have materially different tangents. Adding G1 there forces
-        # the joint to smooth out — which rounds off the corner and
-        # turns a triangular ear into a trapezoidal blob. So we
-        # measure the tangent deflection at the joint and skip G1
-        # past the threshold.
+        smooth_thresh_rad = math.radians(self.fit_config.smooth_junction_deg_threshold)
+
+        def _build_constraints(
+            segments: List[FittedSegment], prims: List[Primitive]
+        ) -> SoftConstraints:
+            """Junction + internal-chain-joint constraints for the
+            current ``(segments, prims)`` state. Called once initially
+            and again after the within-chain fusion pass (which
+            renumbers primitive ids and changes which primitive ids are
+            adjacent inside a chain).
+
+            See the long-form notes baked into the original inline
+            version for the Circle vs Arc/Line joint handling and the
+            G1 deflection gate.
+            """
+            soft_ = build_junction_constraints(
+                self.graph,
+                segments,
+                smooth_junction_deg=self.fit_config.smooth_junction_deg_threshold,
+                primitives=prims,
+            )
+            for seg in segments:
+                pids = seg.primitive_ids
+                for k in range(len(pids) - 1):
+                    a_pid = pids[k]
+                    b_pid = pids[k + 1]
+                    a_is_circle = isinstance(prims[a_pid], Circle)
+                    b_is_circle = isinstance(prims[b_pid], Circle)
+                    if a_is_circle and not b_is_circle:
+                        soft_.on_curve.append(
+                            OnCurve(terminating=(b_pid, "start"), host=a_pid)
+                        )
+                    elif b_is_circle and not a_is_circle:
+                        soft_.on_curve.append(
+                            OnCurve(terminating=(a_pid, "end"), host=b_pid)
+                        )
+                    else:
+                        soft_.coincide.append(
+                            Coincide((a_pid, "end"), (b_pid, "start"))
+                        )
+                    if a_is_circle or b_is_circle:
+                        continue
+                    t_end = tangent_at_end(prims[a_pid], "end")
+                    t_start = tangent_at_end(prims[b_pid], "start")
+                    dot = float(np.clip(np.dot(t_end, t_start), -1.0, 1.0))
+                    deflection = math.acos(dot)
+                    if deflection < smooth_thresh_rad:
+                        soft_.g1.append(
+                            G1Smooth(a=a_pid, alpha_a=1.0, b=b_pid, alpha_b=0.0)
+                        )
+
+                # Wrap-around joint for near-closed polylines. The graph
+                # builder only marks polylines with endpoint gap < 1.5 px
+                # as closed (and only those get a self-junction that
+                # pulls both ends together). Hand-drawn loops often
+                # close with a 2-5 px gap — graph treats one end as a
+                # terminal that happens to share a junction with another
+                # stroke, leaving the OTHER end floating. Routing then
+                # sees the two chain ends as separate vertices and
+                # emits a wasteful pen-up + back-track between them
+                # (the ghostclock bottom-of-body junction was the
+                # canonical case). Adding a Coincide between the
+                # chain's first.start and last.end pulls them together
+                # via the solver, so the routing's endpoint clustering
+                # then collapses them into one vertex.
+                if len(pids) >= 2:
+                    poly = self.graph.polylines[seg.polyline_index]
+                    # NOTE: ``abs_tol`` here is deliberately stricter
+                    # (5 px) than ``is_near_closed_polyline``'s default
+                    # (10 px, used by ``fit_polyline`` to decide "is
+                    # this loop a Circle"). The two tests answer
+                    # different questions. The fitting test can afford
+                    # to be generous — mis-classifying a 10 px-gap loop
+                    # as a Circle is visually fine. This test ADDS A
+                    # HARD COINCIDE pulling the chain's two ends
+                    # together; doing that on a stroke that wasn't
+                    # really meant to close (a 6-10 px gap that is
+                    # genuine open geometry) would visibly distort it.
+                    # So the wrap-around joint only fires on near-exact
+                    # closure.
+                    if is_near_closed_polyline(poly, abs_tol=5.0):
+                        first_pid = pids[0]
+                        last_pid = pids[-1]
+                        first_is_circle = isinstance(prims[first_pid], Circle)
+                        last_is_circle = isinstance(prims[last_pid], Circle)
+                        if not (first_is_circle or last_is_circle):
+                            soft_.coincide.append(
+                                Coincide((last_pid, "end"), (first_pid, "start"))
+                            )
+            return soft_
+
+        # Phase 2: junction-derived constraints. Coincide ALWAYS at
+        # internal joints — we want consecutive primitives to share an
+        # endpoint. G1 ONLY when the joint is actually smooth: top-down
+        # splitting puts chain breakpoints at sharp corners (the apex
+        # of a cat ear, the cusp of a heart), where the two adjoining
+        # primitives have materially different tangents. Adding G1
+        # there would round the corner. So we measure tangent
+        # deflection and skip G1 past ``smooth_junction_deg_threshold``.
         #
         # EXCEPTION: when one of the two consecutive primitives is a
         # Circle (chain produced by sub-loop extraction — the loop
         # part fits as a Circle, the rest fits as an Arc), Coincide
-        # would force the Circle's theta=0 to match the Arc's
-        # endpoint. theta=0 is the arbitrary convention point on the
-        # Circle (center + (r, 0)), so a hard match there pulls the
-        # entire circle to satisfy it (vasesun's sun went from r=90
-        # to r=1077 because the solver shifted the center 1500px
-        # away to put theta=0 at the stem-top junction). Use
-        # OnCurve instead — the Arc's endpoint must lie SOMEWHERE
-        # on the Circle's perimeter, not at a specific point.
-        smooth_thresh_rad = math.radians(self.fit_config.smooth_junction_deg_threshold)
-        for seg in self.fitted_segments:
-            pids = seg.primitive_ids
-            for k in range(len(pids) - 1):
-                a_pid = pids[k]
-                b_pid = pids[k + 1]
-                a_is_circle = isinstance(self.primitives_initial[a_pid], Circle)
-                b_is_circle = isinstance(self.primitives_initial[b_pid], Circle)
-                if a_is_circle and not b_is_circle:
-                    soft.on_curve.append(
-                        OnCurve(terminating=(b_pid, "start"), host=a_pid)
-                    )
-                elif b_is_circle and not a_is_circle:
-                    soft.on_curve.append(
-                        OnCurve(terminating=(a_pid, "end"), host=b_pid)
-                    )
-                elif a_is_circle and b_is_circle:
-                    # Two adjacent Circles in a chain is unusual but
-                    # not impossible. Treat as concentric (their centers
-                    # coincide) rather than endpoint-coincide.
-                    soft.coincide.append(Coincide((a_pid, "end"), (b_pid, "start")))
-                else:
-                    soft.coincide.append(Coincide((a_pid, "end"), (b_pid, "start")))
-                # G1 only applies between primitives with meaningful
-                # tangent endpoints (skip if either is a Circle, since
-                # tangent_at_end on a Circle is at the arbitrary theta=0
-                # point and isn't meaningful for chain joints).
-                if a_is_circle or b_is_circle:
-                    continue
-                t_end = tangent_at_end(self.primitives_initial[a_pid], "end")
-                t_start = tangent_at_end(self.primitives_initial[b_pid], "start")
-                dot = float(np.clip(np.dot(t_end, t_start), -1.0, 1.0))
-                deflection = math.acos(dot)
-                if deflection < smooth_thresh_rad:
-                    soft.g1.append(G1Smooth(a=a_pid, alpha_a=1.0, b=b_pid, alpha_b=0.0))
-        self.soft_initial = soft
+        # would force the Circle's theta=0 (an arbitrary convention
+        # point) to match the Arc's endpoint, which pulls the entire
+        # circle to satisfy it (vasesun's sun went from r=90 to r=1077
+        # because the solver shifted the center 1500px away to put
+        # theta=0 at the stem-top junction). Use OnCurve instead.
+        self.soft_initial = _build_constraints(
+            self.fitted_segments, self.primitives_initial
+        )
 
         # Phase 3: first solve.
         pos_scale = _bbox_diag(self.graph)
@@ -309,9 +380,54 @@ class Vectorize:
             )
         else:
             primitives_fitted = []
-            result = SolveResult([], [], soft, True, 0.0, 0)
+            result = SolveResult([], [], self.soft_initial, True, 0.0, 0)
         self.primitives_fitted = primitives_fitted
         self.solve_result = result
+
+        # Phase 3.5: within-chain fusion.
+        #
+        # The chain subdivider's per-piece tolerances are tight; on
+        # hand-drawn curves with noisy strokes, a gentle arc can fail
+        # the single-arc fit while each ~5px sub-window fits a line
+        # well. The result is a "line spin line spin …" chain that
+        # represents what should have been one arc command. We
+        # post-process each chain by greedily fusing runs of
+        # consecutive primitives whose union still fits a single
+        # Line/Arc within a (looser) tolerance. Chain boundaries are
+        # respected — graph junctions stay intact.
+        if primitives_fitted:
+            new_segments: List[FittedSegment] = []
+            for seg in self.fitted_segments:
+                chain_prims = [primitives_fitted[pid] for pid in seg.primitive_ids]
+                fused_pieces, fused_src = fuse_chain(
+                    seg.pieces, seg.source_points, chain_prims
+                )
+                new_segments.append(
+                    FittedSegment(
+                        polyline_index=seg.polyline_index,
+                        pieces=fused_pieces,
+                        primitive_ids=[],  # filled by assign_global_ids below
+                        source_points=fused_src,
+                    )
+                )
+            n_before = len(primitives_fitted)
+            self.fitted_segments = new_segments
+            self.primitives_fitted = assign_global_ids(self.fitted_segments)
+            # Refresh the global source-points map with the new ids.
+            new_source: Dict[int, NDArray] = {}
+            for seg in self.fitted_segments:
+                for pid, src in zip(seg.primitive_ids, seg.source_points):
+                    new_source[pid] = src
+            source_points = new_source
+            self.source_points = source_points
+            self.n_fused = n_before - len(self.primitives_fitted)
+            # Regenerate constraints against the new primitive ids.
+            self.soft_initial = _build_constraints(
+                self.fitted_segments, self.primitives_fitted
+            )
+            primitives_fitted = self.primitives_fitted
+        else:
+            self.n_fused = 0
 
         # Phase 4: beautification + re-solve.
         if self.beautify_enabled and primitives_fitted:
@@ -366,7 +482,7 @@ class Vectorize:
         self.tour = order_primitives(
             self.primitives_fitted, self.start_pos, snap_tol=snap_tol
         )
-        self.commands: Sequence[DrawingCommand] = to_commands(
+        self.commands_fitted: Sequence[DrawingCommand] = to_commands(
             self.primitives_fitted,
             self.tour,
             self.start_pos,
@@ -377,13 +493,39 @@ class Vectorize:
         self.tour_consolidated = order_primitives(
             self.primitives_consolidated, self.start_pos, snap_tol=snap_tol
         )
-        self.consolidated: Sequence[DrawingCommand] = to_commands(
+        self.commands_consolidated: Sequence[DrawingCommand] = to_commands(
             self.primitives_consolidated,
             self.tour_consolidated,
             self.start_pos,
             self.start_heading,
             pen_up_join_tol=pen_up_join_tol,
         )
+
+        # Per-command back-pointers: every drawing command gets a list
+        # of ``CommandSpan`` runs telling you which raw segments the
+        # primitive it draws came from, with start/end indices in the
+        # raw segment and start/end ratios along the command's
+        # geometry. Non-drawing commands (spins, pen-ups) carry an
+        # empty span list. Only produced when the caller supplied
+        # ``labeled_segments``; otherwise stays ``None``.
+        self.labeled_commands_consolidated: Optional[List[LabeledCommand]] = None
+        if self.input_labeled_segments is not None:
+            # ``primitives_consolidated`` references fitted_segments' piece
+            # ranges, which index into the SUBSAMPLED polyline that
+            # ``build_chains`` produced. ``polyline_subsample_cap`` is
+            # the same number ``build_chains`` used.
+            self.labeled_commands_consolidated = label_commands(
+                self.commands_consolidated,
+                self.tour_consolidated,
+                self.primitives_consolidated,
+                self.fitted_segments,
+                self.graph.polylines,
+                self.input_labeled_segments,
+                polyline_subsample_cap=self.fit_config.polyline_subsample_cap,
+                start_pos=self.start_pos,
+                start_heading=self.start_heading,
+                pen_up_join_tol=pen_up_join_tol,
+            )
 
     # ----------------------------------------------------------------
     # Diagnostics
@@ -414,13 +556,13 @@ class Vectorize:
         n_arcs = sum(1 for p in self.primitives_fitted if isinstance(p, Arc))
         n_circles = sum(1 for p in self.primitives_fitted if isinstance(p, Circle))
         n_pen_ups = sum(
-            1 for c in self.commands if c["kind"] == "line" and not c["penDown"]
+            1 for c in self.commands_fitted if c["kind"] == "line" and not c["penDown"]
         )
         return (
             f"{len(self.primitives_fitted)} primitives "
             f"({n_lines} lines, {n_arcs} arcs, {n_circles} circles) "
             f"in {len(self.fitted_segments)} chains, "
-            f"{len(self.commands)} commands "
+            f"{len(self.commands_fitted)} commands "
             f"({n_pen_ups} pen-ups), "
             f"first-solve cost={self.solve_result.cost:.2f}, "
             f"consolidated cost={self.solve_result_consolidated.cost:.2f}"

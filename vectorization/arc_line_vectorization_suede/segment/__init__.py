@@ -52,6 +52,11 @@ from .fusion import (
     PostRepairFuseConfig,
 )
 from .repair import repair_junctions, RepairConfig
+from .labels import (
+    LabeledSegment,
+    RawSegmentSpan,
+    assign_raw_segment_labels,
+)
 
 
 def filter_short_polylines(
@@ -132,4 +137,13 @@ class Segment:
 
         self.fused_post_repair, self.joined_accepted = fuse_post_repair(
             self.repaired, config=post_repair_fuse
+        )
+
+        # Back-pointer: every pixel of every final polyline gets the id
+        # of the raw (trace.py output, post-min-length filter) segment
+        # it came from, packed into ``RawSegmentSpan`` runs that tile
+        # the final polyline. ``self.labeled_segments[k]`` corresponds
+        # to ``self.fused_post_repair[k]``.
+        self.labeled_segments = assign_raw_segment_labels(
+            self.segments, self.fused_post_repair
         )

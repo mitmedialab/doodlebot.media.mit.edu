@@ -23,6 +23,19 @@ Emitted commands match the robot's interface in ``commands.py``:
 Heading convention (per ``commands.py``): positive degrees = CCW in
 image coords (which renders as CW on screen). For arcs, ``radius`` is
 always positive; the sign of ``degrees`` selects direction.
+
+Scope — this stage minimizes PEN-UPS, not total turning. The Eulerian
+/ Chinese-Postman tour picks *an* order that visits every primitive
+with the fewest pen-up jumps, but among the many valid Eulerian paths
+it does not choose the one with the least in-place spinning, and spins
+are a large part of the firmware draw time. Closing that gap is the
+job of ``OptimizeRoute`` (see ``release/optimize.py``), which re-orders
+and re-directs the pen-down primitives against the full firmware
+motion model. ``OptimizeRoute`` is therefore a REQUIRED final stage:
+the command streams produced here (and exposed as
+``LowGeometryVectorize.commands_consolidated``) are pen-up-optimal but
+not time-optimal, and on some images are slower than the naive
+high-geometry baseline until ``OptimizeRoute`` has run.
 """
 
 from __future__ import annotations
@@ -120,7 +133,14 @@ def _build_multigraph(
             w = 2.0 * math.pi * p.radius
         else:
             w = 0.0
-        G.add_edge(u, v, key=pid, weight=float(w))
+        # Prefix the multigraph key with 'p' so original edges are
+        # string-keyed. eulerize() auto-assigns INTEGER keys to the
+        # duplicate edges it adds for Chinese-Postman parity fixing; if
+        # we used raw integer pids, those auto-assigned ints would
+        # collide with primitive ids and the post-tour filter (which
+        # tries to drop synthetic edges) would keep them — causing the
+        # same primitive to be drawn multiple times in a row.
+        G.add_edge(u, v, key=f"p{pid}", weight=float(w))
     return G
 
 
@@ -225,19 +245,19 @@ def order_primitives(
             tour.append((u, v, key))
             cur_pos = vert_positions[v]
 
-    # Resolve direction per edge. Synthetic eulerize-added edges have
-    # keys not present in our original primitives → those become
-    # pen-up jumps and we skip them in the emitted command sequence.
-    original_keys = set(edge_to_verts.keys())
+    # Resolve direction per edge. Original edges are string-keyed
+    # ("p{pid}") in _build_multigraph; eulerize-added duplicates use
+    # auto-assigned integer keys. Drop anything that isn't string-keyed
+    # — the pen-up handling in to_commands() will emit a pen-up + move
+    # for the resulting gap.
     out: List[Tuple[int, bool]] = []
     for u, v, key in tour:
-        if key not in original_keys:
-            # Synthetic edge (parity fix); ignored — the pen-up handling
-            # in to_commands() will emit a pen-up + move when needed.
+        if not isinstance(key, str) or not key.startswith("p"):
             continue
-        orig_u, orig_v = edge_to_verts[key]
+        pid = int(key[1:])
+        orig_u, orig_v = edge_to_verts[pid]
         reverse = u == orig_v and v == orig_u and orig_u != orig_v
-        out.append((key, reverse))
+        out.append((pid, reverse))
     return out
 
 

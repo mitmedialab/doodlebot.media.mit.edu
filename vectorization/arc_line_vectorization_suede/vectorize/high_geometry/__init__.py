@@ -30,8 +30,6 @@ from ...commands import (
     Stroke,
 )
 
-from .consolidate import consolidate_commands, ConsolidateConfig
-
 # ============================================================================
 # Stage 3: curvature-based segmentation
 # ============================================================================
@@ -576,17 +574,22 @@ class Vectorize:
             corner_threshold: float
             max_fit_residual: float | None
 
-        class Consolidate(ConsolidateConfig):
-            pass
-
     def __init__(
         self,
         polylines: List[NDArray[np.float64]],
         start_pos: NDArray[np.float64],
         start_heading: float,
         commands: Config.ToCommands,
-        consolidate: Config.Consolidate,
     ):
+        # NOTE: the high-geometry path is a deliberately *naive* baseline
+        # used only for comparison against the low-geometry pipeline. It
+        # segments at curvature peaks, classifies each segment as a
+        # line/arc, and greedily orders strokes — there is no joint
+        # constraint solve and no command consolidation. A
+        # command-consolidation pass once lived here but was always worse
+        # than the low-geometry solver, so it was removed; consolidate
+        # high-geometry output (if ever needed) by running the polylines
+        # through ``LowGeometryVectorize`` instead.
         self.commands = polylines_to_commands(
             polylines,
             sigma=commands["sigma"],
@@ -595,11 +598,3 @@ class Vectorize:
             start_pos=start_pos,
             start_heading=start_heading,
         )
-
-        # opt for low geometry consolidation by default since it's better
-        # self.consolidated, self.report = consolidate_commands(
-        #     self.commands,
-        #     start_pos=start_pos,
-        #     start_heading=start_heading,
-        #     config=consolidate,
-        # )

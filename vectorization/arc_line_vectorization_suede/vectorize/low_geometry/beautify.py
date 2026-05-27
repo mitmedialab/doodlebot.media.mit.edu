@@ -64,6 +64,37 @@ def _center(prim: Primitive):
     return None
 
 
+def _arc_angular_coverage_deg(arc: Arc, center: np.ndarray) -> set:
+    """The set of integer-degree angular bins (around ``center``) that
+    ``arc`` sweeps through.
+
+    Used to test whether a group of arcs *tiles* a full circle. Summing
+    arc sweeps is not enough: a crescent's two arcs both sweep the same
+    angular sector (just at two radii) so their sweeps sum past 320°
+    while their angular *union* is far short of 360°. Measuring the
+    union of covered angles rejects that case and generalizes cleanly
+    to any number of arcs.
+
+    The covered interval is computed exactly from the start angle and
+    sweep (then every integer degree inside it is marked) rather than
+    by point-sampling — point-sampling plus integer truncation leaves
+    spurious 1° gaps that under-count a genuine full circle.
+    """
+    import math
+
+    p0 = arc.p0
+    a0 = math.degrees(math.atan2(p0[1] - center[1], p0[0] - center[0]))
+    sweep = math.degrees(arc.sweep())
+    lo = min(a0, a0 + sweep)
+    hi = max(a0, a0 + sweep)
+    bins = set()
+    d = math.floor(lo)
+    while d <= hi:
+        bins.add(int(d % 360))
+        d += 1.0
+    return bins
+
+
 def detect(
     prims: List[Primitive],
     tol: BeautifyTolerances,
@@ -156,6 +187,11 @@ def merge_arc_pairs(
     chord midpoint (which is closer to the true center than either
     individual fit when the two fits split the difference).
 
+    A second pass then merges groups of THREE OR MORE arcs that
+    together tile a circle (see the in-body comment): same concentric
+    + equal-radius test, but qualification is by angular-union
+    coverage rather than a pairwise sweep match.
+
     Returns ``(new_primitives, merged_pairs)``.
     """
     import math
@@ -245,6 +281,95 @@ def merge_arc_pairs(
             used[j] = True
             merged_pairs.append((i, j))
             break
+
+    # --- 3+ arc grouping pass ------------------------------------------
+    # The loop above only joins arcs two at a time. A closed loop that
+    # was chain-subdivided into THREE OR MORE arcs (a wheel split at
+    # spurious corners, a circle broken at inflection false-positives)
+    # needs a group merge. Generalized criteria, on the arcs the
+    # pairwise pass left untouched:
+    #   * mutually concentric (centers within center_tol) + equal radius
+    #   * angular spans around the shared centre cover ~360° (the union,
+    #     not the sum — this is what still rejects crescents)
+    #   * every endpoint pairs with another arc's endpoint (a genuine
+    #     connected loop, not co-incidentally co-circular arcs)
+    remaining = [p for p in arc_pids if not used[p]]
+    for ii in range(len(remaining)):
+        i = remaining[ii]
+        if used[i]:
+            continue
+        a = prims[i]
+        assert isinstance(a, Arc)
+        ra = _radius(a)
+        ca = _center(a)
+        group = [i]
+        for j in remaining[ii + 1:]:
+            if used[j]:
+                continue
+            b = prims[j]
+            assert isinstance(b, Arc)
+            rb = _radius(b)
+            cb = _center(b)
+            r_mean = 0.5 * (ra + rb)
+            if abs(ra - rb) / max(ra, rb) > radius_tol_rel:
+                continue
+            if float(np.linalg.norm(ca - cb)) > center_tol_rel * r_mean:
+                continue
+            group.append(j)
+
+        if len(group) < 3:
+            continue
+
+        arcs = [prims[g] for g in group]
+        radii = [_radius(p) for p in arcs]
+        if (max(radii) - min(radii)) / max(radii) > radius_tol_rel:
+            continue
+        centers = [_center(p) for p in arcs]
+        mean_c = np.mean(np.array(centers), axis=0)
+        mean_r = float(np.mean(radii))
+
+        covered: set = set()
+        total_sweep = 0.0
+        for p in arcs:
+            assert isinstance(p, Arc)
+            covered |= _arc_angular_coverage_deg(p, mean_c)
+            total_sweep += abs(math.degrees(p.sweep()))
+        # Angular union must tile ~360° (1 bin == 1°), and the summed
+        # sweep must stay within a single wrap (no double-covered loop).
+        if len(covered) < 340:
+            continue
+        if total_sweep > 420.0:
+            continue
+
+        # Endpoint pairing: every one of the 2k endpoints must sit near
+        # an endpoint of a DIFFERENT arc in the group.
+        tol_pt = max(endpoint_tol_rel * mean_r, 3.0)
+        endpoints = []
+        for p in arcs:
+            assert isinstance(p, Arc)
+            endpoints.append(p.p0)
+            endpoints.append(p.p1)
+        connected = True
+        for ei, e in enumerate(endpoints):
+            partner = any(
+                (eo // 2) != (ei // 2)
+                and float(np.linalg.norm(e - o)) < tol_pt
+                for eo, o in enumerate(endpoints)
+            )
+            if not partner:
+                connected = False
+                break
+        if not connected:
+            continue
+
+        # All gates passed — replace the whole group with one Circle.
+        replacement[group[0]] = Circle(center=mean_c, radius=mean_r)
+        for g in group[1:]:
+            replacement[g] = None
+        for g in group:
+            used[g] = True
+        for g in group[1:]:
+            merged_pairs.append((group[0], g))
 
     if not merged_pairs:
         return list(prims), []

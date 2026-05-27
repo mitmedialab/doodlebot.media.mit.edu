@@ -186,26 +186,6 @@ def _chain_endpoint(seg: FittedSegment, end: str) -> Tuple[int, str]:
     return seg.primitive_ids[-1], "end"
 
 
-def _internal_joint_constraints(
-    seg: FittedSegment,
-    smooth_g1: bool = True,
-) -> Tuple[List[Coincide], List[G1Smooth]]:
-    """Coincide + G1 between consecutive sub-primitives in a chain.
-
-    Internal joints lie inside one fluid stroke, so they should be
-    smooth by default. The G1 can be suppressed if downstream knows
-    a corner sits at this index (rare).
-    """
-    coincide: List[Coincide] = []
-    g1: List[G1Smooth] = []
-    pids = seg.primitive_ids
-    for k in range(len(pids) - 1):
-        coincide.append(Coincide((pids[k], "end"), (pids[k + 1], "start")))
-        if smooth_g1:
-            g1.append(G1Smooth(a=pids[k], alpha_a=1.0, b=pids[k + 1], alpha_b=0.0))
-    return coincide, g1
-
-
 def _polyline_endpoint_to_chain_end(poly_n: int, point_index: int) -> Optional[str]:
     """Map a Participation's point_index to the chain end ("start" or
     "end") if it sits at one of the polyline endpoints; None otherwise.
@@ -395,9 +375,6 @@ def build_junction_constraints(
                     )
 
     return out
-
-
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

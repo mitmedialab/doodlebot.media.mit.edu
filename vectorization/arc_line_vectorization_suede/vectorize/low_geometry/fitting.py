@@ -188,6 +188,83 @@ def count_corners(
     ))
 
 
+def find_inflections(
+    pts: NDArray[np.float64],
+    smooth_window: int = 4,
+    sign_threshold: float = 0.03,
+    min_sustain: int = 3,
+    min_separation: int = 12,
+) -> List[int]:
+    """Return polyline indices at which the curvature reverses sign in
+    a sustained way — the stroke smoothly switches from turning one
+    direction to turning the other (a classic S-curve).
+
+    These are NOT corners. The polyline is tangent-continuous at the
+    inflection (no kink), but no single Line or Arc can represent the
+    span on both sides, so chain subdivision has to split there. The
+    existing ``find_corners`` only fires on tangent-direction
+    discontinuities (≥50° turn), so smooth inflections slip through —
+    the topdown recursion is then left to find the inflection via
+    residual-argmax, which doesn't reliably pick the right index
+    (angel poly 2's wing-bottom: a 58-point S-curve where residual
+    argmax stayed near the boundary, the recursion nibbled 4 pts
+    per level, hit max_depth, and the forced-terminal fell back to a
+    chord-line that visibly cut through the angel's face).
+
+    Algorithm: smooth the tangent direction, compute signed cross
+    products of consecutive smoothed tangents (which is signed turn
+    rate), and report an inflection when ``min_sustain`` samples of
+    one sign appear immediately before ``min_sustain`` samples of the
+    other sign (with magnitude above ``sign_threshold`` to ignore
+    noise). Non-max suppression: merge inflections closer than
+    ``min_separation``.
+
+    Indices returned are positions in the input ``pts`` array.
+    """
+    n = len(pts)
+    if n < 2 * (smooth_window + min_sustain) + 2:
+        return []
+    diffs = np.diff(pts, axis=0)
+    if len(diffs) < smooth_window + 1:
+        return []
+    smoothed = np.empty((len(diffs) - smooth_window + 1, 2), dtype=np.float64)
+    for k in range(len(smoothed)):
+        v = diffs[k:k + smooth_window].sum(axis=0)
+        nrm = float(np.linalg.norm(v))
+        smoothed[k] = (0.0, 0.0) if nrm < _EPS else v / nrm
+    if len(smoothed) < 2:
+        return []
+    cross = (
+        smoothed[:-1, 0] * smoothed[1:, 1]
+        - smoothed[:-1, 1] * smoothed[1:, 0]
+    )
+
+    # Walk the cross array looking for a stretch of "all positive
+    # above threshold" immediately followed by "all negative above
+    # threshold" (or vice versa).
+    inflections: List[int] = []
+    last_inflection_pos = -min_separation
+    half_offset = smooth_window // 2 + 1  # map cross-index back to pts-index
+    nc = len(cross)
+    i = min_sustain
+    while i < nc - min_sustain:
+        left = cross[i - min_sustain:i]
+        right = cross[i:i + min_sustain]
+        if (
+            np.all(left > sign_threshold) and np.all(right < -sign_threshold)
+        ) or (
+            np.all(left < -sign_threshold) and np.all(right > sign_threshold)
+        ):
+            pos = i + half_offset
+            if pos - last_inflection_pos >= min_separation:
+                inflections.append(pos)
+                last_inflection_pos = pos
+            i += min_separation
+        else:
+            i += 1
+    return inflections
+
+
 # ---------------------------------------------------------------------------
 # Single-primitive fitters
 
@@ -272,6 +349,87 @@ def fit_circle(
     return fit_circle_geometric(pts, c0, r0)
 
 
+_MAX_RADIUS_FACTOR = 8.0
+
+# Minimum arc sagitta (max perpendicular bow of the arc away from its
+# chord) for a fitted arc to be kept as an Arc rather than degraded to a
+# Line. An arc whose bow is below ~1 px is visually a straight line: the
+# pen draws the same picture either way, but as an Arc it carries a
+# radius/sweep the firmware estimator and the joint solver both treat as
+# real curvature. ``routing.py`` already degrades sub-0.5 px arcs at
+# emit time; applying the (slightly stricter) test here in ``fit_arc``
+# means the primitive is a Line from the start, so the solver,
+# beautification and routing all see a consistent shape. The threshold
+# is an absolute pixel value on purpose — "sub-pixel bow" is a
+# scale-invariant notion of "indistinguishable from a line".
+_MIN_ARC_SAGITTA_PX = 1.0
+
+# Absolute pixel ceiling on the RMS tolerance of ``fit_polyline``'s
+# "accept the whole corner-free polyline as one Arc" shortcut. On the
+# order of a stroke width: large enough that genuine pen tremor on a
+# clean arc still shortcuts, small enough that a deliberately wavy edge
+# (cheese-block scallops) is rejected and sent to chain subdivision so
+# the waviness is preserved. See the shortcut site in ``fit_polyline``.
+_SINGLE_ARC_SHORTCUT_RMS_CAP = 6.0
+
+# Looser companion ceiling. Between the strict cap and this value the
+# arc fit is "borderline": the shortcut is taken only if the polyline
+# is too SPARSE to subdivide reliably (see ``_SUBDIVISION_MIN_POINTS``).
+_SINGLE_ARC_SHORTCUT_RMS_LOOSE_CAP = 12.0
+
+# Minimum point count for a borderline-rms polyline to be sent to chain
+# subdivision rather than kept as one arc. Below this, subdivision
+# would split too few points among the resulting pieces, leaving each
+# piece's fit (and the joint solve) under-constrained. Densely sampled
+# polylines above this threshold subdivide reliably.
+_SUBDIVISION_MIN_POINTS = 40
+
+
+def _has_curvature_reversal(
+    pts: NDArray[np.float64],
+    smooth_window: int = 4,
+    min_turns_each_sign: int = 2,
+    sign_threshold: float = 0.05,
+) -> bool:
+    """Detect whether a polyline turns in BOTH directions (an S-curve or
+    zigzag), which means a single Line or Arc would mis-represent it.
+
+    Computes a smoothed tangent at each point, then signs of consecutive
+    smoothed-tangent cross products. If at least ``min_turns_each_sign``
+    samples turn each way (after thresholding small noise via
+    ``sign_threshold``), it's a reversal. Used inside ``fuse_chain`` to
+    refuse fusing across inflections that would otherwise average out.
+    """
+    n = len(pts)
+    if n < 2 * smooth_window + 2:
+        return False
+    diffs = np.diff(pts, axis=0)
+    nd = len(diffs)
+    if nd < smooth_window + 1:
+        return False
+    # Smooth the tangent by summing windows of consecutive segments,
+    # then normalize. This filters out per-pixel jitter.
+    smoothed = np.empty((nd - smooth_window + 1, 2), dtype=np.float64)
+    for k in range(nd - smooth_window + 1):
+        v = diffs[k:k + smooth_window].sum(axis=0)
+        nrm = float(np.linalg.norm(v))
+        if nrm < _EPS:
+            smoothed[k] = np.array([0.0, 0.0])
+        else:
+            smoothed[k] = v / nrm
+    if len(smoothed) < 2:
+        return False
+    # Cross product of consecutive smoothed tangents: sign indicates
+    # turn direction. Positive = CCW in image coords (=CW on screen).
+    cross = (
+        smoothed[:-1, 0] * smoothed[1:, 1]
+        - smoothed[:-1, 1] * smoothed[1:, 0]
+    )
+    pos = int(np.sum(cross > sign_threshold))
+    neg = int(np.sum(cross < -sign_threshold))
+    return pos >= min_turns_each_sign and neg >= min_turns_each_sign
+
+
 def fit_arc(pts: NDArray[np.float64]) -> Tuple[Optional[Arc], float]:
     """Fit a circle to the points, then build an arc using the first and
     last points as endpoints. Returns (Arc, rms) or (None, inf) if fit
@@ -285,6 +443,16 @@ def fit_arc(pts: NDArray[np.float64]) -> Tuple[Optional[Arc], float]:
         return None, float("inf")
     c, r, rms = fit_circle(pts)
     if not np.isfinite(r) or r < _EPS:
+        return None, float("inf")
+    # Reject pathologically large radii. A "real" arc spans at least
+    # some non-trivial fraction of its circle, so its radius is bounded
+    # by ``radius <= _MAX_RADIUS_FACTOR * extent``. Beyond that, the fit
+    # is a near-collinear point set that the algebraic solver "rescued"
+    # by placing the center thousands of pixels away — the resulting
+    # arc is visually indistinguishable from a line, but the firmware
+    # time estimator and the downstream joint solver both treat it as
+    # a real arc with a huge wheelbase swing.
+    if r > _MAX_RADIUS_FACTOR * _segment_extent(pts):
         return None, float("inf")
 
     p0 = pts[0]
@@ -341,6 +509,17 @@ def fit_arc(pts: NDArray[np.float64]) -> Tuple[Optional[Arc], float]:
     sweep = sweep_sign * sweep_mag
     bulge = float(np.tan(sweep / 4.0))
 
+    # Sagitta gate: reject arcs whose perpendicular bow is sub-pixel.
+    # sagitta = r * (1 - cos(sweep / 2)). Such an "arc" is visually a
+    # straight line; returning None lets ``fit_single_primitive`` /
+    # ``fuse_chain`` pick the Line instead, which is cheaper for the
+    # solver and avoids feeding the firmware estimator a spurious
+    # radius. (A genuine gentle arc — e.g. 10 deg over a 150 px chord —
+    # has several px of sagitta and is unaffected.)
+    sagitta = r * (1.0 - math.cos(0.5 * sweep_mag))
+    if sagitta < _MIN_ARC_SAGITTA_PX:
+        return None, float("inf")
+
     arc = Arc(p0.copy(), p1.copy(), bulge)
     return arc, rms
 
@@ -353,6 +532,15 @@ def fit_full_circle(
         return None, float("inf")
     c, r, rms = fit_circle(pts)
     if not np.isfinite(r) or r < _EPS:
+        return None, float("inf")
+    # Reject pathological fits where the algebraic solver placed the
+    # circle center far outside the points themselves — see fit_arc for
+    # the same guard. The classic trigger is a tiny near-collinear
+    # patch (e.g. a 4-point horizontal stub) where any Circle is a
+    # perfect fit, including ones with the center thousands of pixels
+    # away. Without this gate, the alien example produced two Circle
+    # primitives with r=40,000 from a 6x1 px patch.
+    if r > _MAX_RADIUS_FACTOR * _segment_extent(pts):
         return None, float("inf")
     return Circle(c, r), rms
 
@@ -411,9 +599,28 @@ def fit_single_primitive(
     arc_ok = arc is not None and arc_rms < arc_tol_abs
     arc_sse = (arc_rms ** 2) * n if arc is not None else float("inf")
 
-    # Prefer line when both work and line SSE isn't much worse — fewer
-    # parameters, simpler downstream routing, doesn't suffer from bulge
-    # numerics. The "1.5x" gives arcs a fair shot when the curve is real.
+    # Prefer Arc when both fit AND the arc has visually meaningful
+    # curvature. Without this, the chain subdivider would emit a Line
+    # for any stroke whose sagitta happens to be below line_tol — even
+    # if the underlying curve sweeps tens of degrees. Each subsequent
+    # output line+spin pair then represents geometry that one arc
+    # command could draw faster (and visually correctly). 10° is the
+    # threshold at which sagitta/chord ≈ 0.022, i.e. about 2% of chord
+    # — large enough to be visually clear, small enough not to misfire
+    # on near-straight noise. See angel poly 2's wing and birdlove
+    # poly 2's heart top.
+    arc_min_sweep_rad = math.radians(10.0)
+    if (
+        arc_ok
+        and arc is not None
+        and abs(arc.sweep()) >= arc_min_sweep_rad
+    ):
+        return arc, arc_sse
+
+    # Otherwise prefer Line when both work and line SSE isn't much
+    # worse than arc SSE — fewer parameters, simpler downstream
+    # routing, no bulge numerics. The "1.5x" gives arcs a fair shot
+    # when the curve is real but below the meaningful-sweep gate.
     if line_ok and (not arc_ok or line_sse <= 1.5 * arc_sse):
         return line, line_sse
     if arc_ok:
@@ -476,9 +683,29 @@ def fit_segment_topdown(
         worst = int(np.argmax(res))
         worst += lo
         worst = max(lo + min_len, min(hi - min_len, worst))
-        if worst <= lo or worst >= hi:
-            # Couldn't find a valid split; accept the whole window as-is.
-            prim = line
+        # BOTH children must have a strictly smaller window than this
+        # one, otherwise we'd recurse on the same range until ``depth``
+        # hits ``max_depth`` and the forced-terminal branch fires —
+        # producing a chain of degenerate L(0) pieces, one per depth
+        # level (angel poly 10 produced 10+ identical 1-point pieces
+        # this way). The first child is ``recurse(lo, worst + 1)``, so
+        # ``worst + 1 < hi`` keeps it strictly smaller. ``worst > lo``
+        # keeps the second child strictly smaller.
+        if worst <= lo or worst + 1 >= hi:
+            # Couldn't find a valid split; accept the whole window
+            # as-is. Use ``fit_single_primitive`` with relaxed
+            # tolerance so the same Arc-vs-Line preference fires
+            # here as elsewhere — defaulting to Line means windows
+            # of real curvature get linified at exactly the points
+            # the algorithm has the least information (the angel
+            # wing's bottom edge ended up here, at 19.8° of sweep,
+            # but the bail-out picked Line so a slanted edge cut
+            # straight through the angel's face).
+            prim, _ = fit_single_primitive(
+                pts[lo:hi], line_tol_abs * 4, arc_tol_abs * 4
+            )
+            if prim is None:
+                prim = line
             pieces.append(ChainPiece(lo, hi, prim))
             return
 
@@ -577,43 +804,83 @@ def fit_segment_dp(
     return chain
 
 
-def find_closed_subloop(
+def _validate_subloop_candidate(
+    pts: NDArray[np.float64],
+    i: int,
+    j: int,
+    stride: int,
+    min_size: int,
+    max_circle_rms_rel: float,
+) -> Optional[Tuple[int, int]]:
+    """Check one ``(i, j)`` sub-loop candidate: it must fit a clean
+    circle, be roughly circular in aspect, and is then refined to the
+    exact closest endpoint pair. Returns the refined ``(i, j)`` or
+    ``None`` if the candidate fails any gate.
+    """
+    n = len(pts)
+    sub = pts[i:j + 1]
+    circle, rms = fit_full_circle(sub)
+    if circle is None:
+        return None
+    loop_ext = _segment_extent(sub)
+    if rms >= max_circle_rms_rel * loop_ext:
+        return None
+    xs = sub[:, 0]
+    ys = sub[:, 1]
+    bbox_x = float(xs.max() - xs.min())
+    bbox_y = float(ys.max() - ys.min())
+    if min(bbox_x, bbox_y) < _EPS:
+        return None
+    aspect = max(bbox_x, bbox_y) / min(bbox_x, bbox_y)
+    if aspect >= 1.25:
+        return None
+    # Refine: shift i and j by +/-stride to find the exact closest pair.
+    best_d = float(np.linalg.norm(pts[j] - pts[i]))
+    refined_i, refined_j = i, j
+    for di in range(-stride, stride + 1):
+        ii = i + di
+        if ii < 0 or ii >= n:
+            continue
+        for dj in range(-stride, stride + 1):
+            jj = j + dj
+            if jj < 0 or jj >= n or jj - ii < min_size:
+                continue
+            d = float(np.linalg.norm(pts[jj] - pts[ii]))
+            if d < best_d:
+                best_d = d
+                refined_i, refined_j = ii, jj
+    return (refined_i, refined_j)
+
+
+def find_closed_subloops(
     pts: NDArray[np.float64],
     min_size: int = 100,
     closure_threshold_rel: float = 0.06,
     min_extent_rel: float = 0.20,
     max_circle_rms_rel: float = 0.06,
-) -> Optional[Tuple[int, int]]:
-    """Find a near-closed sub-loop within an open polyline that
-    ALSO fits a single Circle well.
+) -> List[Tuple[int, int]]:
+    """Find ALL near-closed circular sub-loops within an open polyline.
 
-    Looks for (i, j) with ``j - i >= min_size`` such that:
-      1. ``||pts[j] - pts[i]||`` < ``closure_threshold_rel * polyline_extent``
-         (the endpoints meet)
-      2. ``extent(pts[i:j+1])`` >= ``min_extent_rel * polyline_extent``
-         (the loop has meaningful spatial size; rules out tiny
-         self-crossings)
-      3. The sub-loop fits a circle with RMS below
-         ``max_circle_rms_rel * loop_extent`` (the loop is actually
-         circular — rules out V-shapes or U-shapes whose endpoints
-         happen to be close but whose interior path isn't a circle)
+    Generalizes ``find_closed_subloop``: a single hand-drawn stroke can
+    thread more than one loop (a figure-8, a stack of bubbles drawn
+    without lifting the pen, a flower drawn as several petals off one
+    contour). Each qualifying sub-loop is split out so it can hit the
+    closed-circle shortcut independently.
 
-    Returns ``(i, j)`` for the LARGEST qualifying sub-loop, or
-    ``None``. The largest is preferred because outer/wider loops
-    are usually the intended shape (a wheel rim, not a small
-    embedded swirl).
-
-    Example: bikelove's right-wheel polyline poly[14] traces the
-    rim for ~650 indices and then continues into the bottom
-    squiggle. Detecting [0, 650] as a circular sub-loop lets the
-    rim become a Circle while the squiggle gets fit separately.
+    Each returned ``(i, j)`` satisfies the same three gates as the
+    single-loop version (endpoints meet, meaningful spatial extent,
+    fits a circle with low RMS and near-unit aspect). Returned loops
+    are pairwise NON-OVERLAPPING — when candidates overlap, the larger
+    is kept (outer/wider loops are usually the intended shape). The
+    list is sorted by start index so callers can use it directly as
+    split points.
     """
     n = len(pts)
     if n < 2 * min_size:
-        return None
+        return []
     extent = _segment_extent(pts)
     if extent < 1.0:
-        return None
+        return []
     closure_thresh = closure_threshold_rel * extent
     extent_thresh = min_extent_rel * extent
 
@@ -631,48 +898,422 @@ def find_closed_subloop(
                 break  # take largest j for this i
 
     if not candidates:
-        return None
+        return []
 
-    # Try the largest candidates first; require a clean circle fit
-    # AND a reasonable aspect ratio (a true wheel/sun is roughly
-    # circular, not stretched).
+    # Largest first; accept a candidate only if it passes the circle /
+    # aspect gates AND does not overlap an already-accepted loop.
     candidates.sort(reverse=True)
-    for size, i, j in candidates:
-        sub = pts[i:j + 1]
-        circle, rms = fit_full_circle(sub)
-        if circle is None:
+    accepted: List[Tuple[int, int]] = []
+    for _size, i, j in candidates:
+        if any(not (j < ai or i > aj) for ai, aj in accepted):
+            continue  # overlaps a kept loop
+        refined = _validate_subloop_candidate(
+            pts, i, j, stride, min_size, max_circle_rms_rel
+        )
+        if refined is None:
             continue
-        loop_ext = _segment_extent(sub)
-        if rms >= max_circle_rms_rel * loop_ext:
+        ri, rj = refined
+        # Re-check overlap after refinement.
+        if any(not (rj < ai or ri > aj) for ai, aj in accepted):
             continue
-        xs = sub[:, 0]
-        ys = sub[:, 1]
-        bbox_x = float(xs.max() - xs.min())
-        bbox_y = float(ys.max() - ys.min())
-        if min(bbox_x, bbox_y) < _EPS:
+        accepted.append((ri, rj))
+
+    accepted.sort()
+    return accepted
+
+
+def find_closed_subloop(
+    pts: NDArray[np.float64],
+    min_size: int = 100,
+    closure_threshold_rel: float = 0.06,
+    min_extent_rel: float = 0.20,
+    max_circle_rms_rel: float = 0.06,
+) -> Optional[Tuple[int, int]]:
+    """Find the single LARGEST near-closed circular sub-loop within an
+    open polyline (thin wrapper over ``find_closed_subloops``, kept for
+    callers that only want one).
+
+    See ``find_closed_subloops`` for the gate criteria. The largest is
+    preferred because outer/wider loops are usually the intended shape
+    (a wheel rim, not a small embedded swirl).
+
+    Example: bikelove's right-wheel polyline poly[14] traces the rim
+    for ~650 indices and then continues into the bottom squiggle.
+    Detecting [0, 650] as a circular sub-loop lets the rim become a
+    Circle while the squiggle gets fit separately.
+    """
+    loops = find_closed_subloops(
+        pts,
+        min_size=min_size,
+        closure_threshold_rel=closure_threshold_rel,
+        min_extent_rel=min_extent_rel,
+        max_circle_rms_rel=max_circle_rms_rel,
+    )
+    if not loops:
+        return None
+    return max(loops, key=lambda ij: ij[1] - ij[0])
+
+
+def _line_collapse(
+    pieces: List[ChainPiece],
+    source_points: List[NDArray[np.float64]],
+    line_tol_abs: float,
+) -> Tuple[List[ChainPiece], List[NDArray[np.float64]]]:
+    """Collapse runs of consecutive Lines (and small Arcs) whose union
+    of source points fits a single Line within ``line_tol_abs``.
+
+    Why this exists separately from the main greedy fusion: the main
+    pass uses ``_has_curvature_reversal`` to refuse fusing across S-
+    curves, which is necessary when the candidate is an Arc (the fit
+    averages opposing curvatures to a near-zero sweep that wrong-
+    renders the geometry). For a Line candidate that protection is
+    moot — ``line_rms`` already rejects S-curves (the centerline is
+    far from both halves) and accepts noise around a straight stretch
+    (rms stays small). Dropping the guard lets the line-collapse find
+    cases like angel poly 13's `[L(8), L(10), L(7)]` tail and angel
+    poly 14's `[L(10), L(7), L(4), L(8)]` tail — runs that the chain
+    subdivider broke up but which are visually one straight stroke.
+
+    Arcs are also eligible. A small Arc bracketed by Lines whose union
+    still fits a single Line (e.g., 5° sweep in the middle of a 100 px
+    near-straight stretch) gets folded in. A large Arc fails the line
+    fit naturally because its sagitta dominates rms. ``Circle`` is
+    always skipped (a closed loop can never project onto a line).
+
+    Single-piece "windows" are NOT modified — replacing a standalone
+    Arc with its chord-line would silently throw away legitimate
+    curvature. Collapse only happens when we successfully extend past
+    the first piece.
+    """
+    n = len(pieces)
+    if n < 2:
+        return pieces, source_points
+
+    # Pre-compute the sweep sign of each piece (0 for lines / tiny arcs).
+    # Used to detect when extending the window would span an S-curve —
+    # an arc of one sign followed by an arc of the opposite sign means
+    # the underlying stroke turns both ways. ``line_rms`` happily
+    # averages opposing curvatures (the deviations cancel), so it can
+    # not flag the S-curve on its own; without this guard,
+    # birdlove's heart-top S-curves got flattened into a polyline.
+    arc_sign_threshold_rad = math.radians(8.0)
+    sweep_signs: List[int] = []
+    for c in pieces:
+        p = c.primitive
+        if isinstance(p, Arc) and abs(p.sweep()) >= arc_sign_threshold_rad:
+            sweep_signs.append(1 if p.sweep() > 0 else -1)
+        else:
+            sweep_signs.append(0)
+
+    out_pieces: List[ChainPiece] = []
+    out_src: List[NDArray[np.float64]] = []
+    i = 0
+    while i < n:
+        prim_i = pieces[i].primitive
+        if isinstance(prim_i, Circle):
+            out_pieces.append(pieces[i])
+            out_src.append(source_points[i])
+            i += 1
             continue
-        aspect = max(bbox_x, bbox_y) / min(bbox_x, bbox_y)
-        if aspect >= 1.25:
+
+        best_j = i + 1
+        best_line: Optional[Line] = None
+        best_pts: Optional[NDArray[np.float64]] = None
+
+        # Sign of the first signed-arc we've encountered in the window
+        # (0 means we haven't seen one yet). Once set, any new piece
+        # with the OPPOSITE sign breaks the window.
+        seen_sign = sweep_signs[i]
+
+        for j in range(i + 2, n + 1):
+            if isinstance(pieces[j - 1].primitive, Circle):
+                break
+            nxt_sign = sweep_signs[j - 1]
+            if nxt_sign != 0:
+                if seen_sign != 0 and nxt_sign != seen_sign:
+                    # Opposite-sign arcs in the same window — don't
+                    # collapse to a line, that would silently
+                    # straighten out an S-curve.
+                    break
+                seen_sign = nxt_sign
+            concat = np.vstack(source_points[i:j])
+            if len(concat) < 2:
+                break
+            cand_line, cand_rms = fit_line(concat)
+            if cand_rms >= line_tol_abs:
+                break
+            best_j = j
+            best_line = cand_line
+            best_pts = concat
+
+        if best_line is not None and best_pts is not None:
+            out_pieces.append(
+                ChainPiece(
+                    pieces[i].start_idx,
+                    pieces[best_j - 1].end_idx,
+                    best_line,
+                )
+            )
+            out_src.append(best_pts)
+        else:
+            out_pieces.append(pieces[i])
+            out_src.append(source_points[i])
+        i = best_j
+
+    return out_pieces, out_src
+
+
+def _is_degenerate(prim: Primitive) -> bool:
+    """A primitive is degenerate if it represents essentially no
+    geometry — a near-zero-length Line, or an Arc with near-zero sweep.
+    Emitting one as a command costs an alignment spin and a
+    line/arc op for no visible drawing.
+    """
+    if isinstance(prim, Line):
+        return prim.length() < 0.5
+    if isinstance(prim, Arc):
+        return abs(prim.sweep()) < math.radians(0.5)
+    return False
+
+
+def _drop_degenerate_pieces(
+    pieces: List[ChainPiece],
+    source_points: List[NDArray[np.float64]],
+    primitives: List[Primitive],
+) -> Tuple[List[ChainPiece], List[NDArray[np.float64]], List[Primitive]]:
+    """Strip degenerate primitives from a chain, folding their source
+    points into the nearest live neighbor's source-point bag so the
+    polyline coverage is preserved (and the subsequent greedy fusion
+    can refit the neighbor against the full data).
+
+    A degenerate at chain index ``k`` is folded into the previous live
+    piece when one exists, otherwise into the next live piece. If the
+    entire chain is degenerate (unlikely), an empty chain is returned;
+    the caller treats that as "nothing to route".
+    """
+    out_pieces: List[ChainPiece] = []
+    out_src: List[NDArray[np.float64]] = []
+    out_prims: List[Primitive] = []
+    pending_src: List[NDArray[np.float64]] = []  # for degenerates at chain start
+    pending_start: int = -1
+
+    for k, prim in enumerate(primitives):
+        if _is_degenerate(prim):
+            if out_pieces:
+                # Fold into the previous live piece by extending its
+                # end index and concatenating source points.
+                last = out_pieces[-1]
+                out_pieces[-1] = ChainPiece(
+                    last.start_idx, pieces[k].end_idx, last.primitive
+                )
+                out_src[-1] = np.vstack([out_src[-1], source_points[k]])
+            else:
+                # No previous live piece yet — buffer for the next one.
+                if pending_start < 0:
+                    pending_start = pieces[k].start_idx
+                pending_src.append(source_points[k])
             continue
-        # Refine: shift i and j by +/-stride to find the exact
-        # closest pair.
-        i0, j0 = i, j
-        best_d = float(np.linalg.norm(pts[j0] - pts[i0]))
-        refined_i, refined_j = i0, j0
-        for di in range(-stride, stride + 1):
-            ii = i0 + di
-            if ii < 0 or ii >= n:
-                continue
-            for dj in range(-stride, stride + 1):
-                jj = j0 + dj
-                if jj < 0 or jj >= n or jj - ii < min_size:
-                    continue
-                d = float(np.linalg.norm(pts[jj] - pts[ii]))
-                if d < best_d:
-                    best_d = d
-                    refined_i, refined_j = ii, jj
-        return (refined_i, refined_j)
-    return None
+
+        # Live piece: absorb any pending pre-chain degenerates.
+        if pending_src:
+            src = np.vstack(pending_src + [source_points[k]])
+            new_piece = ChainPiece(
+                pending_start, pieces[k].end_idx, prim
+            )
+            pending_src = []
+            pending_start = -1
+        else:
+            src = source_points[k]
+            new_piece = pieces[k]
+        out_pieces.append(new_piece)
+        out_src.append(src)
+        out_prims.append(prim)
+
+    # If the chain ended in degenerates with no prior live piece (and
+    # nothing followed), we drop them entirely — there's no valid
+    # primitive to attach them to.
+    return out_pieces, out_src, out_prims
+
+
+def fuse_chain(
+    pieces: List[ChainPiece],
+    source_points: List[NDArray[np.float64]],
+    primitives: List[Primitive],
+    line_tol_rel: float = 0.006,
+    arc_tol_rel: float = 0.025,
+    line_tol_abs_min: float = 1.0,
+    arc_tol_abs_min: float = 2.5,
+) -> Tuple[List[ChainPiece], List[NDArray[np.float64]]]:
+    """Greedy within-chain fusion: merge runs of consecutive primitives
+    whose union of source points still fits a single Line or Arc within
+    tolerance.
+
+    This catches the case where chain subdivision over-segments a gentle
+    curve: each small piece individually fits a Line within ``line_tol``,
+    but stitched together they're really a single Arc. The user-level
+    output is then ``line spin line spin line spin …`` instead of one
+    arc command — visually similar but draws much slower.
+
+    Boundaries: this function operates within ONE chain (one
+    ``FittedSegment``) at a time, so it never crosses StrokeGraph
+    junctions — graph topology is preserved. Circles are skipped (they
+    represent closed loops and aren't fusable with adjacent open
+    primitives).
+
+    Tolerances scale with the chain's bounding-box diagonal, with an
+    absolute floor so very short chains still get meaningful tolerance.
+    The defaults are ~3x looser than the chain-subdivision tolerance,
+    because the hypothesis here is "these were fit as separate pieces
+    only because the noise-floor per piece is below tolerance" — the
+    union still has the same noise floor, so the fit RMS for the union
+    is roughly the RMS of any one piece. Without some headroom over the
+    per-piece tolerance, nothing ever fuses.
+
+    Returns the new ``(pieces, source_points)`` lists. Caller is
+    responsible for rebuilding the global primitive list and primitive-
+    id mapping (typically via ``assign_global_ids``).
+    """
+    # Phase 0: swallow degenerate pieces. A "Line" with chord < 0.5 px
+    # or an "Arc" with sweep < 0.5 degrees is a fit to ~1 source point
+    # — it represents no real geometry but costs a spin and a
+    # `{"distance": 0, "penDown": true}` command in the output stream
+    # (the angel example had 16 such pieces from a recursion bug in
+    # chain subdivision; even after fixing that, the joint solver and
+    # other paths can still produce occasional degenerates, so we
+    # filter here defensively). Each degenerate's source points are
+    # appended to the previous live piece's source points so the
+    # subsequent greedy fusion has the full polyline context.
+    pieces, source_points, primitives = _drop_degenerate_pieces(
+        pieces, source_points, primitives
+    )
+    n = len(pieces)
+    if n <= 1:
+        # Rewrap the single piece around its current primitive (which
+        # may have been updated by the solver since pieces was built).
+        if n == 0:
+            return [], []
+        return (
+            [ChainPiece(pieces[0].start_idx, pieces[0].end_idx, primitives[0])],
+            [source_points[0]],
+        )
+
+    # Chain-wide extent for tolerance scaling.
+    all_pts = np.vstack(source_points)
+    extent = _segment_extent(all_pts)
+    line_tol_abs = max(line_tol_rel * extent, line_tol_abs_min)
+    arc_tol_abs = max(arc_tol_rel * extent, arc_tol_abs_min)
+
+    new_pieces: List[ChainPiece] = []
+    new_src: List[NDArray[np.float64]] = []
+
+    i = 0
+    while i < n:
+        # Circles aren't fusable — emit as-is.
+        if isinstance(primitives[i], Circle):
+            new_pieces.append(
+                ChainPiece(pieces[i].start_idx, pieces[i].end_idx, primitives[i])
+            )
+            new_src.append(source_points[i])
+            i += 1
+            continue
+
+        # Walk j outward from i+1 and keep the largest window for which
+        # the union of source points still fits a single Line or Arc.
+        # Including j=i+1 here also "re-fits" single pieces: the joint
+        # solver can pull an Arc's radius outward to satisfy adjacent
+        # constraints, leaving us with a near-line that ``fit_arc``
+        # would now reject via its radius cap. Refitting forces those
+        # cases to come back as Lines.
+        best_j = i
+        best_prim: Optional[Primitive] = None
+        best_pts: Optional[NDArray[np.float64]] = None
+
+        for j in range(i + 1, n + 1):
+            # Bail when the next primitive is a Circle.
+            if j > i + 1 and isinstance(primitives[j - 1], Circle):
+                break
+
+            concat = np.vstack(source_points[i:j])
+            if len(concat) < 2:
+                break
+
+            # Curvature-reversal guard. If the concatenated points turn
+            # in BOTH directions, this span is an S-curve / zigzag.
+            # Fitting a single Line averages the wiggles flat; fitting a
+            # single Arc averages the opposite-curvature halves into a
+            # near-zero sweep. Either way the visual detail is lost, so
+            # refuse to extend the window across the reversal. Cheap
+            # checks (sign on primitives' sweeps alone) miss the
+            # frequent case where chain subdivision split an S-curve
+            # into short Lines that have no curvature signal.
+            if j > i + 1 and _has_curvature_reversal(concat):
+                break
+
+            line, line_rms = fit_line(concat)
+            arc: Optional[Arc] = None
+            arc_rms = float("inf")
+            if len(concat) >= 3:
+                arc, arc_rms = fit_arc(concat)
+
+            # Same Arc-vs-Line preference as ``fit_single_primitive``:
+            # when both fit, an Arc with visually meaningful sweep
+            # wins over a Line. This is what prevents the main
+            # fusion from converting a run of small same-direction
+            # arcs (birdlove heart top) into a polyline, just
+            # because the polyline approximation happens to fit
+            # within line_tol. Below 10° sweep the arc is too flat
+            # to read as curved, so we still prefer the simpler
+            # Line.
+            candidate: Optional[Primitive] = None
+            arc_min_sweep_rad = math.radians(10.0)
+            arc_ok = (
+                arc is not None
+                and arc_rms < arc_tol_abs
+            )
+            arc_meaningful = (
+                arc_ok
+                and arc is not None
+                and abs(arc.sweep()) >= arc_min_sweep_rad
+            )
+            if arc_meaningful:
+                candidate = arc
+            elif line_rms < line_tol_abs:
+                candidate = line
+            elif arc_ok:
+                candidate = arc
+
+            if candidate is None:
+                break
+
+            best_j = j
+            best_prim = candidate
+            best_pts = concat
+
+        if best_prim is not None and best_pts is not None:
+            start = pieces[i].start_idx
+            end = pieces[best_j - 1].end_idx
+            new_pieces.append(ChainPiece(start, end, best_prim))
+            new_src.append(best_pts)
+            i = best_j
+        else:
+            # Couldn't fit even the single piece (rare: very short
+            # piece or pathological data). Keep the upstream primitive.
+            new_pieces.append(
+                ChainPiece(pieces[i].start_idx, pieces[i].end_idx, primitives[i])
+            )
+            new_src.append(source_points[i])
+            i += 1
+
+    # Phase 2: line-collapse. The main pass above uses the curvature-
+    # reversal guard which is needed for the Arc-candidate branch but
+    # over-rejects sequences of small Lines (and Lines + small Arcs)
+    # whose union would happily fit a single Line. Run a second pass
+    # without the guard, using ``fit_line``'s RMS as the only gate —
+    # which naturally rejects S-curves (high centerline rms) while
+    # accepting noise around a near-straight stroke.
+    new_pieces, new_src = _line_collapse(new_pieces, new_src, line_tol_abs)
+
+    return new_pieces, new_src
 
 
 def fit_polyline(
@@ -751,7 +1392,11 @@ def fit_polyline(
             if min(bbox_x, bbox_y) > _EPS:
                 aspect = max(bbox_x, bbox_y) / min(bbox_x, bbox_y)
             else:
-                aspect = 1.0
+                # One axis is degenerate (zero spread) — the polyline is
+                # effectively collinear. Treat as infinite aspect so the
+                # Circle shortcut is rejected; the caller will fall through
+                # to chain subdivision, which will fit a Line.
+                aspect = float("inf")
             if aspect < 1.25:
                 return [ChainPiece(0, n, circle)]
         # Otherwise fall through; the DP will handle rounded rectangles.
@@ -766,17 +1411,34 @@ def fit_polyline(
     # Splitting first lets each side of the corner be fit cleanly as
     # a single primitive.
     #
-    # ALSO: look for a near-closed sub-loop within the polyline (e.g.,
+    # ALSO: look for near-closed sub-loops within the polyline (e.g.,
     # the bikelove right wheel rim is the first ~650 indices of a
-    # 994-pt polyline that continues into the bottom squiggle). If a
-    # sub-loop exists, split at its start and end indices so the loop
-    # portion is processed as its own near-closed sub-polyline (which
-    # will then hit the closed-circle shortcut).
-    subloop = find_closed_subloop(pts) if not is_near_closed_polyline(pts) else None
+    # 994-pt polyline that continues into the bottom squiggle). A
+    # single stroke can thread several loops (figure-8s, stacked
+    # bubbles), so every qualifying sub-loop is split out; each loop
+    # region is then processed as its own near-closed sub-polyline
+    # (which hits the closed-circle shortcut).
+    subloops = (
+        find_closed_subloops(pts) if not is_near_closed_polyline(pts) else []
+    )
     splits: List[int] = list(corners)
-    if subloop is not None:
-        splits.extend(subloop)
-        splits = sorted(set(splits))
+    for si, sj in subloops:
+        splits.append(si)
+        splits.append(sj)
+    # Also split at smooth curvature reversals (S-curve inflections).
+    # ``find_corners`` only fires on tangent-direction discontinuities
+    # (kinks ≥50°); a polyline that smoothly switches from CCW to CW
+    # turning has no kink and slips through. Without an explicit split,
+    # the topdown recursion can't fit a single primitive across the
+    # reversal (an S-curve isn't an arc), and its forced-terminal
+    # branch falls back to a chord-line that visually misrepresents
+    # the geometry — see angel poly 2's wing-bottom. Splitting at the
+    # inflection turns the S-curve into two single-direction halves
+    # that the recursive fit handles cleanly.
+    inflections = find_inflections(pts)
+    if inflections:
+        splits.extend(inflections)
+    splits = sorted(set(splits))
     if splits:
         pieces: List[ChainPiece] = []
         split_idxs = [0] + splits + [n]
@@ -810,21 +1472,44 @@ def fit_polyline(
     # when the fit is so close to a real arc that chain subdivision
     # couldn't do meaningfully better.
     #
-    # Critically, the threshold is BOTH 4% of extent AND capped at an
-    # absolute pixel ceiling. A pure relative threshold relaxes
-    # linearly with extent, so a 700-pixel polyline gets a 28-px
-    # tolerance — that's enough to swallow significant shape detail
-    # (heartman's body sub-segments were 706 pts with arc-fit rms of
-    # 23 px, just under 28 px, so the whole body collapsed to one
-    # arc with 23 px of accumulated deviation). The absolute cap of
-    # ~12 px keeps the shortcut "this is essentially noise on a clean
-    # arc" for polylines of any length.
-    arc_rms_abs = min(0.04 * extent, 12.0)
+    # Critically, the threshold is BOTH a fraction of extent AND capped
+    # at an absolute pixel ceiling. A pure relative threshold relaxes
+    # linearly with extent, so a 700-pixel polyline gets a large
+    # tolerance — enough to swallow significant shape detail (heartman's
+    # body sub-segments were 706 pts with arc-fit rms of 23 px, so the
+    # whole body collapsed to one arc with 23 px of accumulated
+    # deviation). The absolute cap keeps the shortcut meaning "this is
+    # essentially noise on a clean arc" for polylines of any length.
+    #
+    # The cap is two-tier. ``_SINGLE_ARC_SHORTCUT_RMS_CAP`` (~1 stroke
+    # width) is the "definitely one clean arc" tolerance. Between that
+    # and ``_SINGLE_ARC_SHORTCUT_RMS_LOOSE_CAP`` the fit is borderline,
+    # and the deciding question is whether chain subdivision can be
+    # *trusted* to do better. Subdivision splits the points among 2-3
+    # pieces and re-fits each; that is only reliable when the polyline
+    # is densely enough sampled that each resulting piece still has
+    # enough points to constrain its fit and the joint solve. A sparse
+    # polyline (few points spread over a large extent) subdivides into
+    # under-constrained pieces that the solve pulls *off* the data —
+    # this is what regressed the smile mouth (a 22-point segment).
+    #
+    # So: a borderline-rms polyline keeps the one-arc shortcut when it
+    # is too sparse to subdivide safely (``n`` below
+    # ``_SUBDIVISION_MIN_POINTS``); a densely sampled borderline
+    # polyline falls through to chain subdivision, which tracks the
+    # real shape detail (the cheese block's irregular edges, ~135
+    # points each, fit a single arc at ~9 px rms but are visibly
+    # better as a short arc chain). RMS magnitude alone cannot tell a
+    # subdivide-worthy edge from clean tremor; sample density can.
+    arc_rms_strict = min(0.04 * extent, _SINGLE_ARC_SHORTCUT_RMS_CAP)
+    arc_rms_loose = min(0.04 * extent, _SINGLE_ARC_SHORTCUT_RMS_LOOSE_CAP)
     if not corners:
         arc, arc_rms = fit_arc(pts)
-        if (arc is not None and arc_rms < arc_rms_abs and
-                arc.chord() > line_tol_abs * 2):
-            return [ChainPiece(0, n, arc)]
+        if arc is not None and arc.chord() > line_tol_abs * 2:
+            if arc_rms < arc_rms_strict:
+                return [ChainPiece(0, n, arc)]
+            if arc_rms < arc_rms_loose and n < _SUBDIVISION_MIN_POINTS:
+                return [ChainPiece(0, n, arc)]
 
     # Single-primitive shortcut (tight tolerance, line OR arc).
     single, _ = fit_single_primitive(pts, line_tol_abs, arc_tol_abs)
