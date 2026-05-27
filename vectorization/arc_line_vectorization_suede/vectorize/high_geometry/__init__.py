@@ -12,7 +12,7 @@ Pipeline stages (matching the recipe):
 
 from __future__ import annotations
 import math
-from typing import List, Tuple, TypedDict
+from typing import List, Optional, Tuple, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,6 +29,7 @@ from ...commands import (
     SpinCommand,
     Stroke,
 )
+from ..labels_common import LabeledCommand, label_commands_geometric
 
 # ============================================================================
 # Stage 3: curvature-based segmentation
@@ -580,6 +581,7 @@ class Vectorize:
         start_pos: NDArray[np.float64],
         start_heading: float,
         commands: Config.ToCommands,
+        raw_segments: List[NDArray[np.float64]] | None = None,
     ):
         # NOTE: the high-geometry path is a deliberately *naive* baseline
         # used only for comparison against the low-geometry pipeline. It
@@ -590,6 +592,8 @@ class Vectorize:
         # than the low-geometry solver, so it was removed; consolidate
         # high-geometry output (if ever needed) by running the polylines
         # through ``LowGeometryVectorize`` instead.
+        self.start_pos = np.asarray(start_pos, dtype=float)
+        self.start_heading = float(start_heading)
         self.commands = polylines_to_commands(
             polylines,
             sigma=commands["sigma"],
@@ -598,3 +602,21 @@ class Vectorize:
             start_pos=start_pos,
             start_heading=start_heading,
         )
+
+        # Optional per-command raw-segment labels. Because this pipeline
+        # tracks no point-range provenance through its frozen
+        # segment/classify/order logic, the labels are recovered
+        # GEOMETRICALLY: each drawing command's path is sampled and each
+        # sample matched to the nearest raw-segment pixel (see
+        # ``release/vectorize/labels_common.py``). When the caller passes
+        # ``raw_segments`` (``Segment.segments``), this populates
+        # ``labeled_commands`` parallel to ``commands``; otherwise it
+        # stays ``None``.
+        self.labeled_commands: Optional[List[LabeledCommand]] = None
+        if raw_segments is not None:
+            self.labeled_commands = label_commands_geometric(
+                self.commands,
+                raw_segments,
+                start_pos=(float(self.start_pos[0]), float(self.start_pos[1])),
+                start_heading=self.start_heading,
+            )

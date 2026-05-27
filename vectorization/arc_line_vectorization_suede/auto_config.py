@@ -49,6 +49,8 @@ from numpy.typing import NDArray
 from PIL import Image
 from scipy.ndimage import distance_transform_edt
 
+from .skeletonize import _to_grayscale_float
+
 # Reference stroke width the hand-tuned defaults assume. Computed as
 # the rough median of stroke widths in the bundled examples — 2.8 px
 # for the smallest, 4.5 px for the largest, with most at ~3 px.
@@ -63,15 +65,28 @@ def _load_binary(
 
     The pipeline's ``Skeletonize.Config.Binarize(threshold=0.5)`` is
     the standard — values below 0.5 are strokes, above are background.
+
+    Accepts the same source shapes ``Skeletonize`` does: a file path, a
+    2-D grayscale array (bool / integer / float), or a 3-D RGB/RGBA
+    array. A multi-channel array is collapsed to a single grayscale
+    channel via the exact converter the pipeline uses, so passing a raw
+    ``np.asarray(rgb_image)`` to ``default_pipeline`` works rather than
+    raising deep inside config derivation.
     """
     if isinstance(source, str):
         arr = np.asarray(Image.open(source).convert("L"), dtype=np.float64) / 255.0
     elif isinstance(source, np.ndarray):
         if source.dtype == np.bool_:
             return source
-        arr = source.astype(np.float64)
-        if arr.max() > 1.0 + 1e-6:
-            arr = arr / 255.0
+        if source.ndim == 3:
+            # RGB/RGBA: composite-over-white (RGBA) then luma-reduce,
+            # exactly as ``Skeletonize`` does for array sources. The
+            # result is already a float grayscale in [0, 1].
+            arr = _to_grayscale_float(source)
+        else:
+            arr = source.astype(np.float64)
+            if arr.max() > 1.0 + 1e-6:
+                arr = arr / 255.0
     else:
         raise TypeError(f"unsupported source type {type(source)!r}")
     return arr < 0.5

@@ -47,7 +47,6 @@ segment (e.g. a corner split inside one raw stroke).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -55,40 +54,10 @@ from numpy.typing import NDArray
 
 from ...commands import DrawingCommand
 from ...segment.labels import LabeledSegment
+from ..labels_common import CommandSpan, LabeledCommand
 from .primitives import Arc, Circle, Line, Primitive, endpoint
 from .routing import _reverse_primitive  # internal helper, OK to reuse
 from .solve import FittedSegment
-
-
-@dataclass(frozen=True)
-class CommandSpan:
-    """One raw-segment contribution to a single drawing command.
-
-    See module docstring for the meaning of each field.
-    """
-
-    raw_segment_id: int
-    raw_start: int
-    raw_end: int
-    command_start_ratio: float
-    command_end_ratio: float
-
-
-@dataclass
-class LabeledCommand:
-    """A command paired with what (if anything) it draws.
-
-    ``primitive_id`` is ``None`` for transit / spin commands. When set,
-    it points into the primitives list that produced the tour.
-    ``final_segment_index`` is the polyline index in the source
-    ``Segment.fused_post_repair``. ``spans`` tiles the drawing
-    command's geometry — empty for non-drawing commands.
-    """
-
-    command: DrawingCommand
-    primitive_id: Optional[int]
-    final_segment_index: Optional[int]
-    spans: List[CommandSpan] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

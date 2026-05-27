@@ -6,7 +6,7 @@
 [subrepo]
 	remote = https://github.com/mitmedialab/arc-line-vectorization-suede
 	branch = release
-	commit = 677366bdeedd3a3efbd84d08cb11b30b38dba8ee
-	parent = bdb708e84c7aaf09b2b3f2b79523702976b38239
+	commit = a58aab314c24722b085526361366b5b2bd5b8650
+	parent = 291b09a4111aed50d93f87118283957fbaa8c0a7
 	method = merge
 	cmdver = 0.4.9
