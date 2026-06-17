@@ -16,13 +16,19 @@ services:
       dockerfile: ./playground.Dockerfile
     restart: "no"
 
+  vectorization:
+    container_name: doodlebot-vectorization
+    build:
+      context: ..
+      dockerfile: ./vectorization/Dockerfile
+    networks:
+      - app-network
+
   backend:
     container_name: doodlebot-backend
     build:
       context: ..
       dockerfile: ./docker/backend.Dockerfile
-    ports:
-      - "8000:80"
     volumes:
       - "./.frontend:/app/frontend"
       - "./.playground:/app/frontend/playground"
