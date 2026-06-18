@@ -30,7 +30,7 @@ COPY . ./server
 WORKDIR /app/server
 
 # uvicorn binds 0.0.0.0:5000 (see app.py).
-EXPOSE 80
+EXPOSE 5000
 
 # `python -m` runs the module with package context (relative imports work) and
 # with __name__ == "__main__", which triggers app.py's uvicorn.run(...).
