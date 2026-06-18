@@ -21,11 +21,29 @@ services:
     build:
       context: ..
       dockerfile: ./docker/backend.Dockerfile
-    ports:
-      - "8000:80"
     volumes:
       - "./.frontend:/app/frontend"
       - "./.playground:/app/frontend/playground"
+    env_file:
+      - path: ../.env
+        required: false
+    networks:
+      - app-network
+
+  live:
+    extends:
+      file: ../doodlebot-ai-live-server-suede/compose.yml
+      service: server
+    # Don't expose on the host — Caddy reaches it over app-network on :5000.
+    ports: !reset []
+    # The base compose declares empty env defaults (e.g. OPENAI_API_KEY:
+    # ${OPENAI_API_KEY:-}). Compose's `environment` overrides `env_file`, so
+    # those empty strings would wipe the .env values. `!override` replaces the
+    # inherited map so secrets load cleanly from .env (matching `backend`).
+    # STATIC_HOST stays here because config.py's code default omits the
+    # /doodlebot-ai-live path suffix.
+    environment: !override
+      STATIC_HOST: ${STATIC_HOST:-https://mitmedialab.github.io/doodlebot-ai-live}
     env_file:
       - path: ../.env
         required: false

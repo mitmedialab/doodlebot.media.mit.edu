@@ -1,6 +1,6 @@
 (routes) {
     handle_path /live* {
-        reverse_proxy live:80
+        reverse_proxy live:5000
     }
 
     handle {
