@@ -1,6 +1,6 @@
 """Moderation queue — list pending sketches, approve them, or reject them."""
 
-import json, base64
+import json, base64, shutil
 from typing import Any
 
 from fastapi import APIRouter, Request, HTTPException
@@ -56,7 +56,7 @@ async def approve(filename: str, request: Request) -> SuccessResponse:
     dst_png = SKETCHES_DIR / filename
     dst_json = SKETCHES_DIR / src_json.name
 
-    src_png.rename(dst_png)
+    shutil.move(str(src_png), str(dst_png))
 
     meta = json.loads(src_json.read_text()) if src_json.exists() else {}
     meta["status"] = "approved"
