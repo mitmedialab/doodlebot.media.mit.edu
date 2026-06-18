@@ -36,7 +36,7 @@ async def _serve(filename: str) -> FileResponse:
 
 @router.get("/")
 async def draw_page() -> FileResponse:
-    return await _serve("draw.html")
+    return await _serve("index.html")
 
 
 @router.get("/gallery")
@@ -49,9 +49,9 @@ async def display_page() -> FileResponse:
     return await _serve("display.html")
 
 
-@router.get("/vectorization")
+@router.get("/vectorize")
 async def vectorization_page() -> FileResponse:
-    return await _serve("vectorization.html")
+    return await _serve("vectorize.html")
 
 
 @router.api_route("/static/bust", methods=["GET", "POST"])
