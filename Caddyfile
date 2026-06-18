@@ -1,7 +1,17 @@
-doodlebot.media.mit.edu {
-    reverse_proxy backend:80
+(routes) {
+    handle_path /live* {
+        reverse_proxy live:80
+    }
+
+    handle {
+        reverse_proxy backend:80
+    }
 }
 
-http://doodlebot.media.mit.edu {
-    reverse_proxy backend:80
+doodlebot.media.mit.edu {
+    import routes
+}
+
+http: //doodlebot.media.mit.edu {
+    import routes
 }
