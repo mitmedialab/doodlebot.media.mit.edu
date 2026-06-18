@@ -12,6 +12,6 @@ doodlebot.media.mit.edu {
     import routes
 }
 
-http: //doodlebot.media.mit.edu {
+http://doodlebot.media.mit.edu {
     import routes
 }
