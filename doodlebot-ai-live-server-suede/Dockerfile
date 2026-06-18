@@ -18,11 +18,11 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 
 # Install dependencies first so this layer is cached unless requirements change.
-COPY .suede/.dependencies/requirements.txt ./
+COPY ./.suede/.dependencies/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application source into the package directory.
-COPY . ./server
+COPY ./*.py ./server
 
 # Runtime data/static paths in the code are relative to the CWD
 # (e.g. FileResponse("static/draw.html"), Path("pending")), so run from inside

@@ -3,7 +3,6 @@ __pycache__/
 .git/
 .github/
 .gitrepo
-.suede/
 
 # Runtime data — provided via volumes, not baked into the image.
 pending/
