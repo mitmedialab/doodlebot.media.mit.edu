@@ -18,7 +18,7 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 
 # Install dependencies first so this layer is cached unless requirements change.
-COPY requirements.txt ./
+COPY .suede/.dependencies/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application source into the package directory.
@@ -30,7 +30,7 @@ COPY . ./server
 WORKDIR /app/server
 
 # uvicorn binds 0.0.0.0:5000 (see app.py).
-EXPOSE 5000
+EXPOSE 80
 
 # `python -m` runs the module with package context (relative imports work) and
 # with __name__ == "__main__", which triggers app.py's uvicorn.run(...).
