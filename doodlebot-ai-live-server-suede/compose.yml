@@ -1,0 +1,28 @@
+services:
+  server:
+    container_name: doodlebot-ai-live-server
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      # host:container — uvicorn binds 0.0.0.0:5000 inside the container.
+      # Host side uses 5001 because macOS AirPlay Receiver (ControlCenter)
+      # occupies host port 5000 by default. Reach the server at localhost:5001.
+      - "5001:5000"
+    environment:
+      # API keys and admin token are read from the host environment (see
+      # config.py). Defaults apply if unset: ADMIN_TOKEN falls back to "test".
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-test}
+      # Front-end pages are fetched from here and cached in-container on first
+      # request (POST /static/bust clears the cache).
+      STATIC_HOST: ${STATIC_HOST:-https://mitmedialab.github.io/doodlebot-ai-live}
+    volumes:
+      # Persist runtime data. Targets live under the container WORKDIR
+      # (/app/server), matching the code's relative paths.
+      - ./combined:/app/server/combined
+      - ./pending:/app/server/pending
+      - ./sketches:/app/server/sketches
+      - ./presets.json:/app/server/presets.json
+    restart: unless-stopped

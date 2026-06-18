@@ -1,0 +1,600 @@
+"""Robot coordination — the polling protocol between Doodlebots and the server.
+
+See the architecture and state-machine diagrams in the repo README. Each bot runs
+a **Locate → Poll → Draw** loop and the server is the matchmaker:
+
+1. **Locate** — the bot fetches the known global positions of the aruco markers
+   (`GET /api/robots/markers`), detects which ones its camera can see, and solves
+   for its own pose in the shared global frame.
+2. **Poll** — roughly once a second the bot checks in (`POST /api/robots/checkin`)
+   reporting its `name`, `pose` and `status`. The server answers either ``wait``
+   (nothing to draw) or ``draw`` (where to *navigate*, what to *draw*, how to
+   *exit*).
+3. **Draw** — the bot drives to the job's start pose, runs the drawing commands,
+   follows the exit path off the canvas, then loops back to Locate.
+
+Unlike a naive design, the **server owns the canvas model**: every canvas, its
+markers, its regions (one region per robot), and — crucially — a per-region
+*occupancy grid* so a new drawing never overlaps an existing one. When a bot is
+handed a job the coordinator runs a placement search (rotation + offset) in that
+bot's region, reserves the footprint, and returns the resulting start pose. The
+heavy geometry (footprint rasterization, occupancy, placement) lives in
+``canvas.py``; this module is the wire protocol, config, and matchmaking.
+"""
+
+from __future__ import annotations
+
+import random
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Annotated, Literal, Optional, TypeAlias, Union
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from . import canvas as canvas_engine
+from .canvas import Canvas, CanvasStore, FootprintCache, Marker, PlacementConfig, Region
+from .common import require_admin
+
+router = APIRouter()
+
+
+# --------------------------------------------------------------------------- #
+# Shared geometry + drawing-command wire types
+#
+# The drawing commands mirror the discriminated union produced by the
+# vectorizer (`arc_line_vectorization_suede.commands.DrawingCommand`) and the
+# bot's TypeScript renderer.
+# --------------------------------------------------------------------------- #
+
+
+class Point(BaseModel):
+    """A position in the shared global frame (millimetres, x-right, y-down)."""
+
+    x: float
+    y: float
+
+
+class Pose(BaseModel):
+    """A position plus a heading (degrees, CCW positive, matching the vectorizer)."""
+
+    x: float
+    y: float
+    headingDegrees: float = 0.0
+
+
+class LineCommand(BaseModel):
+    kind: Literal["line"] = "line"
+    distance: float
+    penDown: bool
+
+
+class SpinCommand(BaseModel):
+    kind: Literal["spin"] = "spin"
+    degrees: float
+
+
+class ArcCommand(BaseModel):
+    kind: Literal["arc"] = "arc"
+    radius: float
+    degrees: float
+
+
+DrawingCommand: TypeAlias = Annotated[
+    Union[LineCommand, SpinCommand, ArcCommand], Field(discriminator="kind")
+]
+
+
+class ArucoMarker(BaseModel):
+    """A fiducial marker at a known global position the bot localizes against."""
+
+    id: int
+    position: Point
+    sizeMm: Optional[float] = None
+
+
+# --------------------------------------------------------------------------- #
+# Canvas configuration (static config + admin endpoint)
+# --------------------------------------------------------------------------- #
+
+
+class RegionConfig(BaseModel):
+    id: str
+    x: float
+    y: float
+    width: float
+    height: float
+    robot: Optional[str] = None  # the robot name assigned to draw this region
+
+
+class PlacementSettings(BaseModel):
+    cellMm: float = 2.0
+    penMm: float = 3.0
+    clearanceMm: float = 8.0
+    searchStepCells: int = 2
+    angleStepDeg: float = 15.0  # rotations tried = 0, step, 2·step, … < 360
+    strategy: Literal["bottom_left", "scatter"] = "bottom_left"
+
+
+class CanvasConfig(BaseModel):
+    id: str
+    width: float
+    height: float
+    markers: list[ArucoMarker] = []
+    regions: list[RegionConfig] = []
+    placement: PlacementSettings = PlacementSettings()
+
+
+# Default canvas layout. In a real deployment this is measured per-venue; defined
+# here (and overridable via `POST /api/robots/canvases`) so the system boots with
+# something. One 1m × 1m canvas, four corner markers, split into two regions.
+DEFAULT_CANVASES: list[CanvasConfig] = [
+    CanvasConfig(
+        id="main",
+        width=1000.0,
+        height=1000.0,
+        markers=[
+            ArucoMarker(id=0, position=Point(x=0.0, y=0.0), sizeMm=100.0),
+            ArucoMarker(id=1, position=Point(x=1000.0, y=0.0), sizeMm=100.0),
+            ArucoMarker(id=2, position=Point(x=1000.0, y=1000.0), sizeMm=100.0),
+            ArucoMarker(id=3, position=Point(x=0.0, y=1000.0), sizeMm=100.0),
+        ],
+        regions=[
+            RegionConfig(id="left", x=0.0, y=0.0, width=500.0, height=1000.0),
+            RegionConfig(id="right", x=500.0, y=0.0, width=500.0, height=1000.0),
+        ],
+    )
+]
+
+
+def _build_canvas(cfg: CanvasConfig) -> Canvas:
+    step = max(1.0, cfg.placement.angleStepDeg)
+    angles = tuple(i * step for i in range(int(360.0 / step)))
+    placement = PlacementConfig(
+        cell_mm=cfg.placement.cellMm,
+        pen_mm=cfg.placement.penMm,
+        clearance_mm=cfg.placement.clearanceMm,
+        search_step_cells=cfg.placement.searchStepCells,
+        angles_deg=angles,
+        strategy=cfg.placement.strategy,
+    )
+    return Canvas(
+        id=cfg.id,
+        width=cfg.width,
+        height=cfg.height,
+        markers=[Marker(id=m.id, x=m.position.x, y=m.position.y, size_mm=m.sizeMm) for m in cfg.markers],
+        regions=[
+            Region(
+                id=r.id,
+                x=r.x,
+                y=r.y,
+                width=r.width,
+                height=r.height,
+                robot=r.robot,
+                config=placement,
+            )
+            for r in cfg.regions
+        ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Poll (check-in) request / response
+# --------------------------------------------------------------------------- #
+
+
+RobotStatus: TypeAlias = Literal["locating", "ready", "drawing"]
+
+
+class CheckIn:
+    """The ~1s poll: bot → server report, and the server → bot reply."""
+
+    class Request(BaseModel):
+        name: str
+        status: RobotStatus
+        pose: Pose
+
+    class Wait(BaseModel):
+        """Nothing to draw yet — keep polling."""
+
+        action: Literal["wait"] = "wait"
+        pollAfterSeconds: float = 1.0
+
+    class Draw(BaseModel):
+        """A drawing assignment: navigate to ``navigateTo`` then run ``commands``.
+
+        ``navigateTo`` is the drawing's first ink point in the global frame, and
+        ``navigateTo.headingDegrees`` is the approach heading — the drawing's own
+        start heading plus the rotation the placement search chose for a tight
+        fit. ``commands`` is the drawing with its (pen-up) lead-in stripped off,
+        since the bot drives straight to the first ink point instead.
+        """
+
+        action: Literal["draw"] = "draw"
+        jobId: str
+        navigateTo: Pose
+        commands: list[DrawingCommand]
+        exitPath: list[DrawingCommand] = []
+
+
+CheckInResponse: TypeAlias = Annotated[
+    Union[CheckIn.Draw, CheckIn.Wait], Field(discriminator="action")
+]
+
+
+class DrawingJob(BaseModel):
+    """A unit of work: a vectorized drawing awaiting a bot + a place to put it."""
+
+    jobId: str
+    commands: list[DrawingCommand]
+    exitPath: list[DrawingCommand] = []
+    sourceFilename: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Coordinator — ready pool, job queue, and placement against canvas occupancy
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _StagedJob:
+    job: DrawingJob
+    navigate_to: Pose  # resolved start pose (first ink point + approach heading)
+    commands: list[DrawingCommand]  # the drawing with its lead-in stripped off
+
+
+@dataclass
+class _QueuedJob:
+    """A queued drawing plus its reusable placement inputs.
+
+    ``strokes``/``drawing``/``heading0`` are derived from the commands once, and
+    ``footprints`` memoizes the rotated, rasterized footprints — all reused across
+    the many placement attempts a job sees while it waits for a fitting bot.
+    """
+
+    job: DrawingJob
+    strokes: list
+    drawing: list[DrawingCommand]
+    heading0: float
+    footprints: FootprintCache
+
+
+@dataclass
+class _RobotRecord:
+    name: str
+    pose: Pose
+    status: RobotStatus
+    last_seen: float
+    ready_since: Optional[float]  # monotonic time the bot entered "ready", else None
+    staged: Optional[_StagedJob] = None
+
+
+class _Coordinator:
+    """Thread-safe matchmaker between approved drawings and the ready bot pool."""
+
+    def __init__(self, canvases: list[CanvasConfig], seed: Optional[int] = None) -> None:
+        self._lock = threading.Lock()
+        self._robots: dict[str, _RobotRecord] = {}
+        self._queue: deque[_QueuedJob] = deque()
+        self._store = CanvasStore(_build_canvas(c) for c in canvases)
+        self._job_counter = 0
+        self._rng = random.Random(seed)  # drives scatter placement (deterministic if seeded)
+
+    # -- canvas config ------------------------------------------------------ #
+
+    def markers(self) -> list[Marker]:
+        with self._lock:
+            return self._store.all_markers()
+
+    def canvases(self) -> list[Canvas]:
+        with self._lock:
+            return self._store.all()
+
+    def set_canvas(self, cfg: CanvasConfig) -> None:
+        with self._lock:
+            self._store.upsert(_build_canvas(cfg))
+
+    # -- enqueue (on approval) ---------------------------------------------- #
+
+    def next_job_id(self) -> str:
+        with self._lock:
+            self._job_counter += 1
+            return f"job_{int(time.time())}_{self._job_counter}"
+
+    def enqueue(self, job: DrawingJob) -> None:
+        # Derive the placement inputs once; they're reused across every attempt
+        # this job makes while queued. Strip the lead-in so we place only the ink
+        # and have the bot navigate straight to the first ink point.
+        strokes = canvas_engine.commands_to_strokes(job.commands)
+        _lead_in, drawing, _p0, heading0 = canvas_engine.split_lead_in(job.commands)
+        queued = _QueuedJob(
+            job=job,
+            strokes=strokes,
+            drawing=drawing,
+            heading0=heading0,
+            footprints=FootprintCache(strokes),
+        )
+        with self._lock:
+            self._queue.append(queued)
+            self._assign_locked()
+
+    # -- poll (check-in) ---------------------------------------------------- #
+
+    def check_in(self, req: "CheckIn.Request") -> CheckInResponse:
+        now = time.monotonic()
+        with self._lock:
+            record = self._robots.get(req.name)
+            if record is None:
+                record = _RobotRecord(
+                    name=req.name,
+                    pose=req.pose,
+                    status=req.status,
+                    last_seen=now,
+                    ready_since=now if req.status == "ready" else None,
+                )
+                self._robots[req.name] = record
+            else:
+                if req.status == "ready" and record.status != "ready":
+                    record.ready_since = now
+                elif req.status != "ready":
+                    record.ready_since = None
+                record.pose = req.pose
+                record.status = req.status
+                record.last_seen = now
+
+            self._assign_locked()
+
+            if req.status == "ready" and record.staged is not None:
+                staged = record.staged
+                record.staged = None
+                record.status = "drawing"
+                record.ready_since = None
+                return CheckIn.Draw(
+                    jobId=staged.job.jobId,
+                    navigateTo=staged.navigate_to,
+                    commands=staged.commands,
+                    exitPath=staged.job.exitPath,
+                )
+
+            return CheckIn.Wait()
+
+    # -- introspection (admin) ---------------------------------------------- #
+
+    def snapshot(self) -> "RobotPool":
+        now = time.monotonic()
+        with self._lock:
+            bots = []
+            for r in self._robots.values():
+                region = self._store.region_for_robot(r.name)
+                bots.append(
+                    RobotPool.Bot(
+                        name=r.name,
+                        status=r.status,
+                        pose=r.pose,
+                        region=region.id if region else None,
+                        regionFreeFraction=region.free_fraction if region else None,
+                        idleSeconds=(now - r.ready_since) if r.ready_since else 0.0,
+                        secondsSinceSeen=now - r.last_seen,
+                        stagedJobId=r.staged.job.jobId if r.staged else None,
+                    )
+                )
+            return RobotPool(bots=bots, queuedJobs=len(self._queue))
+
+    # -- internals ---------------------------------------------------------- #
+
+    def _assign_locked(self) -> None:
+        """Place as many queued jobs as possible onto ready bots. Caller holds lock.
+
+        For each queued job we consider every ready bot that has a region and no
+        job already staged, ranked best-first (most idle, then most canvas free),
+        and run a placement search in that bot's region. The first bot whose
+        region can fit the drawing gets it: we reserve the footprint and stage the
+        resolved start pose for delivery on that bot's next check-in. Jobs that
+        currently fit nowhere stay queued (a region only fills up, so they wait
+        for a different ready bot — re-tried on every check-in).
+        """
+
+        if not self._queue:
+            return
+
+        still_queued: deque[_QueuedJob] = deque()
+        while self._queue:
+            qj = self._queue.popleft()
+            placed = False
+
+            candidates = [
+                r
+                for r in self._robots.values()
+                if r.status == "ready"
+                and r.staged is None
+                and self._store.region_for_robot(r.name) is not None
+            ]
+            candidates.sort(key=self._score, reverse=True)
+
+            for bot in candidates:
+                region = self._store.region_for_robot(bot.name)
+                assert region is not None
+                # The placement search rotates the ink for a tighter fit; that
+                # rotation rides on the approach heading, so the drawing commands
+                # are sent unchanged. Footprints are memoized across attempts.
+                placement = region.try_place(
+                    qj.strokes, rng=self._rng, footprints=qj.footprints
+                )
+                if placement is None:
+                    continue
+                region.commit(placement)
+                bot.staged = _StagedJob(
+                    job=qj.job,
+                    navigate_to=Pose(
+                        x=placement.anchor_x,
+                        y=placement.anchor_y,
+                        headingDegrees=qj.heading0 + placement.angle_deg,
+                    ),
+                    commands=qj.drawing,
+                )
+                placed = True
+                break
+
+            if not placed:
+                still_queued.append(qj)
+
+        self._queue = still_queued
+
+    def _score(self, record: _RobotRecord) -> tuple[float, float]:
+        region = self._store.region_for_robot(record.name)
+        free = region.free_fraction if region else 0.0
+        idle = time.monotonic() - record.ready_since if record.ready_since else 0.0
+        return (idle, free)
+
+
+class RobotPool(BaseModel):
+    """Admin/debug view of the coordinator state."""
+
+    class Bot(BaseModel):
+        name: str
+        status: RobotStatus
+        pose: Pose
+        region: Optional[str] = None
+        regionFreeFraction: Optional[float] = None
+        idleSeconds: float
+        secondsSinceSeen: float
+        stagedJobId: Optional[str] = None
+
+    bots: list["RobotPool.Bot"]
+    queuedJobs: int
+
+
+RobotPool.model_rebuild()
+
+
+# Single process-wide coordinator. Other modules (e.g. moderation on approval)
+# enqueue work through `enqueue_drawing`.
+coordinator = _Coordinator(DEFAULT_CANVASES)
+
+
+def enqueue_drawing(
+    commands: list[DrawingCommand],
+    exit_path: Optional[list[DrawingCommand]] = None,
+    source_filename: Optional[str] = None,
+) -> DrawingJob:
+    """Queue a vectorized drawing for placement on the next-best ready bot.
+
+    Intended to be called from the approval flow once a combined sketch has been
+    vectorized into drawing commands. Where the drawing physically lands (region,
+    rotation, offset) is decided by the placement search at assignment time.
+    """
+
+    job = DrawingJob(
+        jobId=coordinator.next_job_id(),
+        commands=commands,
+        exitPath=exit_path or [],
+        sourceFilename=source_filename,
+    )
+    coordinator.enqueue(job)
+    print(f"[robots] queued {job.jobId} ({len(commands)} commands)")
+    return job
+
+
+# --------------------------------------------------------------------------- #
+# Endpoints
+# --------------------------------------------------------------------------- #
+
+
+class Markers(BaseModel):
+    markers: list[ArucoMarker]
+
+
+@router.get("/api/robots/markers")
+async def get_markers() -> Markers:
+    """Locate step: the known global positions of every canvas's aruco markers."""
+    return Markers(
+        markers=[
+            ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm)
+            for m in coordinator.markers()
+        ]
+    )
+
+
+@router.post("/api/robots/checkin")
+async def checkin(payload: CheckIn.Request) -> CheckInResponse:
+    """Poll step: report pose/status, receive ``wait`` or a ``draw`` job."""
+    return coordinator.check_in(payload)
+
+
+class Canvases(BaseModel):
+    class Item(BaseModel):
+        id: str
+        width: float
+        height: float
+        markers: list[ArucoMarker]
+        regions: list[RegionConfig]
+        freeFractionByRegion: dict[str, float]
+
+    canvases: list["Canvases.Item"]
+
+
+Canvases.model_rebuild()
+
+
+@router.get("/api/robots/canvases")
+async def get_canvases(request: Request) -> Canvases:
+    """Admin: the configured canvases with live per-region occupancy."""
+    require_admin(request)
+    items: list[Canvases.Item] = []
+    for c in coordinator.canvases():
+        items.append(
+            Canvases.Item(
+                id=c.id,
+                width=c.width,
+                height=c.height,
+                markers=[
+                    ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm)
+                    for m in c.markers
+                ],
+                regions=[
+                    RegionConfig(
+                        id=r.id, x=r.x, y=r.y, width=r.width, height=r.height, robot=r.robot
+                    )
+                    for r in c.regions
+                ],
+                freeFractionByRegion={r.id: r.free_fraction for r in c.regions},
+            )
+        )
+    return Canvases(canvases=items)
+
+
+@router.post("/api/robots/canvases")
+async def post_canvas(payload: CanvasConfig, request: Request) -> CanvasConfig:
+    """Admin: register or replace a canvas definition (resets its occupancy)."""
+    require_admin(request)
+    coordinator.set_canvas(payload)
+    print(f"[robots] canvas '{payload.id}' configured ({len(payload.regions)} regions)")
+    return payload
+
+
+@router.get("/api/robots")
+async def list_robots(request: Request) -> RobotPool:
+    """Admin: inspect the ready pool, region occupancy, and queued-job depth."""
+    require_admin(request)
+    return coordinator.snapshot()
+
+
+class EnqueueDrawing(BaseModel):
+    commands: list[DrawingCommand]
+    exitPath: list[DrawingCommand] = []
+    sourceFilename: Optional[str] = None
+
+
+@router.post("/api/robots/jobs")
+async def post_job(payload: EnqueueDrawing, request: Request) -> DrawingJob:
+    """Admin: manually enqueue a drawing job (also the internal approval hook)."""
+    require_admin(request)
+    if not payload.commands:
+        raise HTTPException(status_code=400, detail="No drawing commands")
+    return enqueue_drawing(
+        commands=payload.commands,
+        exit_path=payload.exitPath,
+        source_filename=payload.sourceFilename,
+    )

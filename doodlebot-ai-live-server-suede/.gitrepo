@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/mitmedialab/doodlebot-ai-live-server-suede
+	branch = release
+	commit = 72684337f2950005fb65f8d8cb8a717b6f73843f
+	parent = d9cd9bdb96a0de9083c8847c965f1f32adeab953
+	method = merge
+	cmdver = 0.4.9

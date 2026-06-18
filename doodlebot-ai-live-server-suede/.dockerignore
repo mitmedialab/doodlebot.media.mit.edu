@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.git/
+.github/
+.gitrepo
+.suede/
+
+# Runtime data — provided via volumes, not baked into the image.
+pending/
+sketches/
+combined/
+presets.json

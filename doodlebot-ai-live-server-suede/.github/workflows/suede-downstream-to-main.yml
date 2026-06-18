@@ -1,0 +1,128 @@
+name: subrepo-downstream-to-main
+#
+# Lives on the `release` branch. Fires ONCE, on a consumer's initial push of a
+# downstream/** branch (a release-shaped subrepo split). It rebuilds that branch
+# in place as a main-shaped PR head, then opens the PR. From that point the
+# branch is a normal, long-lived feature branch the library maintainers own.
+#
+# The git rebuild — recover the base release commit the consumer actually had,
+# replay their change onto the latest release (conflicts -> markers), and
+# transplant the result under release/ on top of main — now lives in the hosted,
+# unit-tested script scripts/actions/rebuild-pr-branch.sh (single source of
+# truth: the test harness runs the exact same file). This workflow only wires
+# inputs/outputs and opens the PR. Pure git + gh; git-subrepo is not needed here.
+
+on:
+  push:
+    branches:
+      - "downstream/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: suede-downstream-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Base URL for the hosted suede scripts this workflow curls as $SUEDE_SCRIPTS/<path>.
+  # Point it at your canonical host/ref; every referenced script must be reachable there.
+  # (git-subrepo is installed separately on purpose — it's a third-party tool, not a suede script.)
+  SUEDE_SCRIPTS: https://raw.githubusercontent.com/pmalacho-mit/suede/refs/heads/main/scripts
+
+jobs:
+  open-pull-request:
+    # Only the consumer's initial, branch-creating push runs. The force-push
+    # below and any later maintainer pushes are created:false and are skipped,
+    # so there is no loop and no re-processing.
+    if: ${{ github.event.created }}
+    runs-on: ubuntu-latest
+    env:
+      SUBMISSION_REF: ${{ github.ref_name }}                       # downstream/<slug>-<consumer HEAD>
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Configure git identity
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "suede-bot"
+
+      - name: Check out the dependency's main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Rebuild the submission as a main-shaped PR head
+        id: rebuild
+        run: bash -c "$(curl -fsSL "$SUEDE_SCRIPTS/actions/rebuild-pr-branch.sh")"
+        # input  (env): SUBMISSION_REF
+        # outputs:      base_commit, submission_commit, conflicted, has_changes
+        # side effect:  leaves the rebuilt commit on local branch `pull-request-head`
+        # (the script also verifies main has a ./release folder and errors if not)
+
+      - name: Remove the branch if it proposes nothing new
+        if: ${{ steps.rebuild.outputs.has_changes == 'false' }}
+        run: git push origin --delete "$SUBMISSION_REF" || true
+
+      - name: Reuse the trigger branch as the PR head (force-push)
+        if: ${{ steps.rebuild.outputs.has_changes == 'true' }}
+        run: |
+          set -euo pipefail
+          # created:false on this push => the job guard skips any re-trigger.
+          git push --force origin "pull-request-head:refs/heads/${SUBMISSION_REF}"
+
+      - name: Compose the PR description
+        id: description
+        if: ${{ steps.rebuild.outputs.has_changes == 'true' }}
+        env:
+          BASE_COMMIT: ${{ steps.rebuild.outputs.base_commit }}
+          SUBMISSION_COMMIT: ${{ steps.rebuild.outputs.submission_commit }}
+          CONFLICTED: ${{ steps.rebuild.outputs.conflicted }}
+        run: |
+          set -euo pipefail
+          submitted_messages="$(git log --no-merges --format='- %s (%h)' \
+            "${BASE_COMMIT}..${SUBMISSION_COMMIT}" || true)"
+
+          body_path="${RUNNER_TEMP}/pr-body.md"
+          {
+            echo "Snapshot proposed by a downstream consumer via \`git subrepo\`."
+            echo
+            echo "- **Branch / provenance:** \`${SUBMISSION_REF}\`  (consumer repo + commit)"
+            echo "- **Consumer base (release):** \`${BASE_COMMIT}\`"
+            echo "- This branch is now \`main\`-shaped: check it out, test, push fixes, merge."
+            echo
+            if [ "$CONFLICTED" = "true" ]; then
+              echo "> ⚠️ **Unresolved conflict markers are present in \`release/\`** — consumer"
+              echo "> changes overlap newer release changes. Resolve them before merging."
+              echo
+            fi
+            echo "**Submitted commits**"
+            echo "${submitted_messages}"
+          } > "$body_path"
+
+          echo "body_path=$body_path" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: ${{ steps.rebuild.outputs.has_changes == 'true' }}
+        env:
+          BODY_PATH: ${{ steps.description.outputs.body_path }}
+          CONFLICTED: ${{ steps.rebuild.outputs.conflicted }}
+        run: |
+          set -euo pipefail
+          draft_flag=""
+          if [ "$CONFLICTED" = "true" ]; then
+            draft_flag="--draft"
+          fi
+
+          gh pr create \
+            --base main \
+            --head "$SUBMISSION_REF" \
+            $draft_flag \
+            --title "chore(suede): proposed change from ${SUBMISSION_REF}" \
+            --body-file "$BODY_PATH"
+
+      - name: Flag conflicts for the maintainer
+        if: ${{ steps.rebuild.outputs.has_changes == 'true' && steps.rebuild.outputs.conflicted == 'true' }}
+        run: gh pr edit "$SUBMISSION_REF" --add-label "needs-conflict-resolution" || true

@@ -1,0 +1,4 @@
+.dependencies/*
+!.dependencies/*.gitrepo
+!.dependencies/package.json
+!.dependencies/requirements.txt

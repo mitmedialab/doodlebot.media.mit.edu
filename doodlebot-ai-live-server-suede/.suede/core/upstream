@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# .suede/upstream — ships INSIDE a suede dependency:
+#     <repo>/dependencies/<dep>/.suede/upstream
+#
+# Running it proposes THIS dependency's local changes to the library upstream,
+# as a reviewable PR against the library's `main`:
+#     ./dependencies/<dep>/.suede/upstream      (if executable)
+#     bash dependencies/<dep>/.suede/upstream
+#
+# Thin bootstrapper: the real logic is hosted so it can evolve without
+# re-shipping dependencies. It locates the dependency root (exactly one level up,
+# i.e. SELF_DIR/../.gitrepo) and hands it to the hosted script. Override the host
+# for forks/testing with SUEDE_UPSTREAM_URL.
+
+set -euo pipefail
+
+err() { echo "error: $*" >&2; exit 1; }
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)" \
+  || err "cannot resolve script location"
+
+# The dependency root is exactly two levels up from this script
+# (<dep>/.gitrepo, with this script at <dep>/.suede/core/upstream).
+DEP_DIR="$(cd "$SELF_DIR/../.." >/dev/null 2>&1 && pwd)" \
+  || err "cannot resolve dependency root above $SELF_DIR"
+[ -f "$DEP_DIR/.gitrepo" ] \
+  || err "no .gitrepo found at $DEP_DIR/.gitrepo — is this inside a vendored suede dependency?"
+
+command -v curl >/dev/null || err "curl not found"
+HOST="${SUEDE_UPSTREAM_URL:-https://suede.sh/upstream}"
+
+exec bash <(curl -fsSL "$HOST") "$DEP_DIR" "$@"
