@@ -1,5 +1,5 @@
 from .arc_line_vectorization_suede import default_pipeline, DrawingCommand
-from .arc_line_vectorization_suede.visualize import commands_to_svg_compare
+from .arc_line_vectorization_suede.visualize import commands_to_svg, commands_to_svg_compare
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +47,10 @@ def run_vectorization(image_array: np.ndarray):
         "low_geometry": _commands_to_jsonable(low_geometry_optimized.commands),
         "high_geometry": _commands_to_jsonable(high_geometry_optimized.commands),
         "svg": svg,
+        # The low-geometry commands are what we actually publish to a robot, so
+        # render them on their own — this is what the gallery shows after the
+        # eager vectorize completes.
+        "low_geometry_svg": commands_to_svg(low_geometry_optimized.commands),
     }
 
 
