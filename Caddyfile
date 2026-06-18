@@ -3,7 +3,7 @@
         reverse_proxy live:5000
     }
 
-    handle_path /api/robots* {
+    handle /api/robots* {
         reverse_proxy live:5000
     }
 
