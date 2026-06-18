@@ -53,7 +53,6 @@ async def display_page() -> FileResponse:
 async def vectorization_page() -> FileResponse:
     return await _serve("vectorize.html")
 
-
 @router.api_route("/static/bust", methods=["GET", "POST"])
 async def bust_static(req: Request) -> RedirectResponse:
     """Clear the cached static files so they're re-fetched on the next request.
