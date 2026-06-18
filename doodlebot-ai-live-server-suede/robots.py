@@ -320,6 +320,19 @@ class _Coordinator:
             self._queue.append(queued)
             self._assign_locked()
 
+    def queued(self) -> list[DrawingJob]:
+        """The jobs still waiting for a fitting bot (excludes already-staged ones)."""
+        with self._lock:
+            return [qj.job for qj in self._queue]
+
+    def clear_queue(self) -> int:
+        """Drop all waiting jobs. Does not touch jobs already staged on a bot
+        (those have reserved space on a canvas and are mid-delivery)."""
+        with self._lock:
+            n = len(self._queue)
+            self._queue.clear()
+            return n
+
     # -- poll (check-in) ---------------------------------------------------- #
 
     def check_in(self, req: "CheckIn.Request") -> CheckInResponse:
@@ -598,3 +611,47 @@ async def post_job(payload: EnqueueDrawing, request: Request) -> DrawingJob:
         exit_path=payload.exitPath,
         source_filename=payload.sourceFilename,
     )
+
+
+class QueuedJobs(BaseModel):
+    class Item(BaseModel):
+        jobId: str
+        commandCount: int
+        sourceFilename: Optional[str] = None
+
+    jobs: list["QueuedJobs.Item"]
+    count: int
+
+
+QueuedJobs.model_rebuild()
+
+
+@router.get("/api/robots/jobs")
+async def list_jobs(request: Request) -> QueuedJobs:
+    """Admin: inspect the jobs still waiting to be placed on a bot."""
+    require_admin(request)
+    jobs = coordinator.queued()
+    return QueuedJobs(
+        jobs=[
+            QueuedJobs.Item(
+                jobId=j.jobId,
+                commandCount=len(j.commands),
+                sourceFilename=j.sourceFilename,
+            )
+            for j in jobs
+        ],
+        count=len(jobs),
+    )
+
+
+class ClearedJobs(BaseModel):
+    cleared: int
+
+
+@router.delete("/api/robots/jobs")
+async def clear_jobs(request: Request) -> ClearedJobs:
+    """Admin: drop all waiting jobs (does not cancel jobs already staged on a bot)."""
+    require_admin(request)
+    cleared = coordinator.clear_queue()
+    print(f"[robots] cleared {cleared} queued job(s)")
+    return ClearedJobs(cleared=cleared)
