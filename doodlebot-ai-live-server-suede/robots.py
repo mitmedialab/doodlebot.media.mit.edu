@@ -530,7 +530,7 @@ class _Coordinator:
             placement.anchor_y,
             placement.angle_deg,
         )
-        if not self._drawings[canvas_id]:
+        if canvas_id not in self._drawings:
             self._drawings[canvas_id] = []
         self._drawings[canvas_id].append(
             PlacedDrawing(
@@ -641,9 +641,9 @@ async def get_canvases(request: Request) -> Canvases:
     require_admin(request)
     items: list[Canvases.Item] = []
     for c in coordinator.canvases():
-        drawings = coordinator._drawings[c.id]
-        if not drawings:
-            drawings = []
+        drawings = []
+        if c.id in coordinator._drawings:
+            drawings = coordinator._drawings[c.id]
         items.append(
             Canvases.Item(
                 id=c.id,
