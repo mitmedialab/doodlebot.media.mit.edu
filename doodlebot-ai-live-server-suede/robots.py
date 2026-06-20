@@ -641,6 +641,9 @@ async def get_canvases(request: Request) -> Canvases:
     require_admin(request)
     items: list[Canvases.Item] = []
     for c in coordinator.canvases():
+        drawings = coordinator._drawings[c.id]
+        if not drawings:
+            drawings = []
         items.append(
             Canvases.Item(
                 id=c.id,
@@ -661,7 +664,7 @@ async def get_canvases(request: Request) -> Canvases:
                     )
                     for r in c.regions
                 ],
-                drawings=coordinator._drawings[c.id],
+                drawings=drawings,
                 freeFractionByRegion={r.id: r.free_fraction for r in c.regions},
             )
         )
