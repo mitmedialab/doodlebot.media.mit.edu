@@ -29,13 +29,22 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+import math
 from typing import Annotated, Literal, Optional, TypeAlias, Union
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import canvas as canvas_engine
-from .canvas import Canvas, CanvasStore, FootprintCache, Marker, PlacementConfig, Region
+from .canvas import (
+    Canvas,
+    CanvasStore,
+    FootprintCache,
+    Marker,
+    PlacementConfig,
+    Region,
+    Placement,
+)
 from .common import require_admin
 
 router = APIRouter()
@@ -98,6 +107,17 @@ class ArucoMarker(BaseModel):
 # --------------------------------------------------------------------------- #
 # Canvas configuration (static config + admin endpoint)
 # --------------------------------------------------------------------------- #
+
+
+@dataclass
+class PlacedDrawing:
+    job_id: str
+    robot_name: str
+    anchor_x: float
+    anchor_y: float
+    angle_deg: float
+    commands: list
+    strokes: list
 
 
 class RegionConfig(BaseModel):
@@ -164,7 +184,10 @@ def _build_canvas(cfg: CanvasConfig) -> Canvas:
         id=cfg.id,
         width=cfg.width,
         height=cfg.height,
-        markers=[Marker(id=m.id, x=m.position.x, y=m.position.y, size_mm=m.sizeMm) for m in cfg.markers],
+        markers=[
+            Marker(id=m.id, x=m.position.x, y=m.position.y, size_mm=m.sizeMm)
+            for m in cfg.markers
+        ],
         regions=[
             Region(
                 id=r.id,
@@ -274,13 +297,18 @@ class _RobotRecord:
 class _Coordinator:
     """Thread-safe matchmaker between approved drawings and the ready bot pool."""
 
-    def __init__(self, canvases: list[CanvasConfig], seed: Optional[int] = None) -> None:
+    def __init__(
+        self, canvases: list[CanvasConfig], seed: Optional[int] = None
+    ) -> None:
         self._lock = threading.Lock()
         self._robots: dict[str, _RobotRecord] = {}
         self._queue: deque[_QueuedJob] = deque()
         self._store = CanvasStore(_build_canvas(c) for c in canvases)
         self._job_counter = 0
-        self._rng = random.Random(seed)  # drives scatter placement (deterministic if seeded)
+        self._drawings: dict[str, list[PlacedDrawing]] = {}
+        self._rng = random.Random(
+            seed
+        )  # drives scatter placement (deterministic if seeded)
 
     # -- canvas config ------------------------------------------------------ #
 
@@ -428,7 +456,9 @@ class _Coordinator:
 
             for bot in candidates:
                 region = self._store.region_for_robot(bot.name)
+                canvas = self._store.canvas_for_robot(bot.name)
                 assert region is not None
+                assert canvas is not None
                 # The placement search rotates the ink for a tighter fit; that
                 # rotation rides on the approach heading, so the drawing commands
                 # are sent unchanged. Footprints are memoized across attempts.
@@ -447,6 +477,7 @@ class _Coordinator:
                     ),
                     commands=qj.drawing,
                 )
+                self.add_drawing(canvas.id, qj.job, bot.name, qj.drawing, placement)
                 placed = True
                 break
 
@@ -460,6 +491,58 @@ class _Coordinator:
         free = region.free_fraction if region else 0.0
         idle = time.monotonic() - record.ready_since if record.ready_since else 0.0
         return (idle, free)
+
+    def replay_to_world(
+        self, commands, start_x: float, start_y: float, heading_deg: float
+    ):
+        """Mirror the robot: run the (lead-in-stripped) commands from the given start
+        pose and return pen-down polylines in global mm. This deliberately re-derives
+        the ink from the wire message rather than peeking at the occupancy grid."""
+        local = canvas_engine.commands_to_strokes(
+            commands
+        )  # local frame, first ink at (0,0)
+        rad = math.radians(heading_deg)
+        cos_t, sin_t = math.cos(rad), math.sin(rad)
+        world = []
+        for stroke in local:
+            world.append(
+                [
+                    (
+                        px * cos_t - py * sin_t + start_x,
+                        px * sin_t + py * cos_t + start_y,
+                    )
+                    for px, py in stroke
+                ]
+            )
+        return world
+
+    def add_drawing(
+        self,
+        canvas_id: str,
+        job_id: str,
+        robot_name: str,
+        commands: list,
+        placement: Placement,
+    ) -> None:
+        world_strokes = self.replay_to_world(
+            commands,
+            placement.anchor_x,
+            placement.anchor_y,
+            placement.angle_deg,
+        )
+        if not self._drawings[canvas_id]:
+            self._drawings[canvas_id] = []
+        self._drawings[canvas_id].append(
+            PlacedDrawing(
+                job_id=job_id,
+                robot_name=robot_name,
+                anchor_x=placement.anchor_x,
+                anchor_y=placement.anchor_y,
+                angle_deg=placement.angle_deg,
+                commands=commands,
+                strokes=world_strokes,
+            )
+        )
 
 
 class RobotPool(BaseModel):
@@ -543,6 +626,7 @@ class Canvases(BaseModel):
         height: float
         markers: list[ArucoMarker]
         regions: list[RegionConfig]
+        drawings: list[PlacedDrawing]
         freeFractionByRegion: dict[str, float]
 
     canvases: list["Canvases.Item"]
@@ -568,10 +652,16 @@ async def get_canvases(request: Request) -> Canvases:
                 ],
                 regions=[
                     RegionConfig(
-                        id=r.id, x=r.x, y=r.y, width=r.width, height=r.height, robot=r.robot
+                        id=r.id,
+                        x=r.x,
+                        y=r.y,
+                        width=r.width,
+                        height=r.height,
+                        robot=r.robot,
                     )
                     for r in c.regions
                 ],
+                drawings=coordinator._drawings[c.id],
                 freeFractionByRegion={r.id: r.free_fraction for r in c.regions},
             )
         )

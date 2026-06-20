@@ -35,7 +35,16 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional, Protocol, Sequence, TypeAlias, TypeVar, cast
+from typing import (
+    Iterable,
+    Literal,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -340,7 +349,9 @@ class FootprintCache:
     def __init__(self, strokes: Sequence[Stroke]) -> None:
         self._strokes = strokes
         # (angle, cell_mm, half) -> (footprint, first-ink point), both None if empty
-        self._cache: dict[tuple[float, float, int], tuple[Optional[Footprint], Optional[Point]]] = {}
+        self._cache: dict[
+            tuple[float, float, int], tuple[Optional[Footprint], Optional[Point]]
+        ] = {}
 
     def at(
         self, angle: float, cell_mm: float, half_width_cells: int
@@ -359,6 +370,15 @@ class FootprintCache:
 # --------------------------------------------------------------------------- #
 # Region + Canvas
 # --------------------------------------------------------------------------- #
+
+
+@dataclass
+class PlacedDrawing:
+    job_id: str
+    anchor_x: float
+    anchor_y: float
+    angle_deg: float
+    commands: list[DrawingCommand]
 
 
 @dataclass
@@ -558,4 +578,11 @@ class CanvasStore:
             region = canvas.region_for_robot(robot_name)
             if region is not None:
                 return region
+        return None
+
+    def canvas_for_robot(self, robot_name: str) -> Optional[Canvas]:
+        for canvas in self._canvases.values():
+            region = canvas.region_for_robot(robot_name)
+            if region is not None:
+                return canvas
         return None
