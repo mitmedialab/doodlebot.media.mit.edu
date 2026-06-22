@@ -129,6 +129,15 @@ class RegionConfig(BaseModel):
     robot: Optional[str] = None  # the robot name assigned to draw this region
 
 
+class StrokeConfig(BaseModel):
+    job_id: str
+    robot_name: str
+    anchor_x: float
+    anchor_y: float
+    angle_deg: float
+    strokes: list
+
+
 class PlacementSettings(BaseModel):
     cellMm: float = 2.0
     penMm: float = 3.0
@@ -626,7 +635,7 @@ class Canvases(BaseModel):
         height: float
         markers: list[ArucoMarker]
         regions: list[RegionConfig]
-        drawings: list[PlacedDrawing]
+        drawings: list[StrokeConfig]
         freeFractionByRegion: dict[str, float]
 
     canvases: list["Canvases.Item"]
@@ -664,7 +673,17 @@ async def get_canvases(request: Request) -> Canvases:
                     )
                     for r in c.regions
                 ],
-                drawings=drawings,
+                drawings=[
+                    StrokeConfig(
+                        job_id=s.job_id,
+                        anchor_x=s.anchor_x,
+                        anchor_y=s.anchor_y,
+                        angle_deg=s.angle_deg,
+                        strokes=s.strokes,
+                        robot_name=s.robot_name,
+                    )
+                    for s in drawings
+                ],
                 freeFractionByRegion={r.id: r.free_fraction for r in c.regions},
             )
         )
