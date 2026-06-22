@@ -486,7 +486,9 @@ class _Coordinator:
                     ),
                     commands=qj.drawing,
                 )
-                self.add_drawing(canvas.id, qj.job, bot.name, qj.drawing, placement)
+                self.add_drawing(
+                    canvas.id, qj.job.jobId, bot.name, qj.drawing, placement
+                )
                 placed = True
                 break
 
