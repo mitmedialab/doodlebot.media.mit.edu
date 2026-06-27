@@ -570,6 +570,12 @@ class CanvasStore:
     def upsert(self, canvas: Canvas) -> None:
         self._canvases[canvas.id] = canvas
 
+    def remove(self, canvas_id: str) -> None:
+        # Remove the canvas; raises KeyError if not found
+        if canvas_id not in self._canvases:
+            raise KeyError(canvas_id)
+        del self._canvases[canvas_id]
+
     def all_markers(self) -> list[Marker]:
         return [m for canvas in self._canvases.values() for m in canvas.markers]
 
