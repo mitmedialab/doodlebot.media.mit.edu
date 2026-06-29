@@ -533,13 +533,11 @@ class Region:
 def edge_yaw(x: float, y: float, width: float, height: float) -> float:
     """Yaw (radians) of a marker sitting on the canvas boundary.
 
-    Axes are screen-like: +x runs right along the top edge, +y runs down the left
-    edge. Yaw is the inward-facing direction of the marker's edge, measured from
-    the downward (+y) axis and turning toward +x — i.e. ``atan2(nx, ny)`` of the
-    inward normal. That gives: top (y=0) -> 0, left (x=0) -> +pi/2,
-    right (x=width) -> -pi/2, bottom (y=height) -> pi. The nearest edge wins; a
-    corner ties two edges, and we break ties toward the horizontal edge
-    (top/bottom) — consistent with the default corner markers.
+    Markers are assumed to live on the border, so their orientation is implied by
+    which edge they're on (the inward-facing direction): top (y=0) -> 0,
+    left (x=0) -> -pi/2, right (x=width) -> +pi/2, bottom (y=height) -> pi. The
+    nearest edge wins; a corner ties two edges, and we break ties toward the
+    horizontal edge (top/bottom) — consistent with the default corner markers.
     """
     d_top, d_bottom, d_left, d_right = abs(y), abs(height - y), abs(x), abs(width - x)
     nearest = min(d_top, d_bottom, d_left, d_right)
@@ -548,8 +546,8 @@ def edge_yaw(x: float, y: float, width: float, height: float) -> float:
     if nearest == d_bottom:
         return math.pi
     if nearest == d_left:
-        return math.pi / 2
-    return -math.pi / 2
+        return -math.pi / 2
+    return math.pi / 2
 
 
 @dataclass
