@@ -102,6 +102,7 @@ class ArucoMarker(BaseModel):
     id: int
     position: Point
     sizeMm: Optional[float] = None
+    yawRadians: Optional[float] = None  # server-derived from the canvas edge; ignored on input
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +195,15 @@ def _build_canvas(cfg: CanvasConfig) -> Canvas:
         width=cfg.width,
         height=cfg.height,
         markers=[
-            Marker(id=m.id, x=m.position.x, y=m.position.y, size_mm=m.sizeMm)
+            Marker(
+                id=m.id,
+                x=m.position.x,
+                y=m.position.y,
+                size_mm=m.sizeMm,
+                yaw=canvas_engine.edge_yaw(
+                    m.position.x, m.position.y, cfg.width, cfg.height
+                ),
+            )
             for m in cfg.markers
         ],
         regions=[
@@ -324,6 +333,12 @@ class _Coordinator:
     def markers(self) -> list[Marker]:
         with self._lock:
             return self._store.all_markers()
+
+    def markers_for_robot(self, robot_name: str) -> list[Marker]:
+        """Markers of the canvas the robot is placed on (empty if unassigned)."""
+        with self._lock:
+            canvas = self._store.canvas_for_robot(robot_name)
+            return list(canvas.markers) if canvas is not None else []
 
     def canvases(self) -> list[Canvas]:
         with self._lock:
@@ -627,12 +642,23 @@ class Markers(BaseModel):
 
 
 @router.get("/api/robots/markers")
-async def get_markers() -> Markers:
-    """Locate step: the known global positions of every canvas's aruco markers."""
+async def get_markers(robot: Optional[str] = None) -> Markers:
+    """Locate step: the known global positions of aruco markers.
+
+    Without ``robot`` returns every canvas's markers. With ``?robot=<name>`` it
+    returns only the markers of the canvas that robot is placed on (the canvas
+    owning the region assigned to it), so a bot localizes against its own canvas
+    alone. An unknown or unassigned robot yields an empty list.
+    """
+    markers = (
+        coordinator.markers_for_robot(robot)
+        if robot is not None
+        else coordinator.markers()
+    )
     return Markers(
         markers=[
-            ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm)
-            for m in coordinator.markers()
+            ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm, yawRadians=m.yaw)
+            for m in markers
         ]
     )
 
@@ -674,7 +700,7 @@ async def get_canvases(request: Request) -> Canvases:
                 width=c.width,
                 height=c.height,
                 markers=[
-                    ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm)
+                    ArucoMarker(id=m.id, position=Point(x=m.x, y=m.y), sizeMm=m.size_mm, yawRadians=m.yaw)
                     for m in c.markers
                 ],
                 regions=[
