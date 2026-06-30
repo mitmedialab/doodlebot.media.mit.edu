@@ -468,14 +468,26 @@ class _Coordinator:
         scaled = []
 
         for cmd in commands:
-            match cmd.kind:
-                case "line":
-                    scaled.append(replace(cmd, distance=cmd.distance * scale))
-                case "arc":
-                    scaled.append(replace(cmd, radius=cmd.radius * scale))
-                case _:
-                    # spin or anything else
-                    scaled.append(cmd)
+            if cmd.kind == "line":
+                scaled.append(
+                    LineCommand(
+                        kind="line",
+                        distance=cmd.distance * scale,
+                        penDown=cmd.penDown,
+                    )
+                )
+
+            elif cmd.kind == "arc":
+                scaled.append(
+                    ArcCommand(
+                        kind="arc",
+                        radius=cmd.radius * scale,
+                        degrees=cmd.degrees,
+                    )
+                )
+
+            else:  # spin
+                scaled.append(cmd)
 
         return scaled
 
