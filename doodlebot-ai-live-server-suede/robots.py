@@ -524,7 +524,7 @@ class _Coordinator:
                 )
                 print("placement", placement)
                 if placement is None:
-                    scaled_commands = self.scale_commands(qj.commands, 0.1)
+                    scaled_commands = self.scale_commands(qj.drawing, 0.1)
                     new_strokes = self.replay_to_world(
                         scaled_commands,
                         placement.anchor_x,
