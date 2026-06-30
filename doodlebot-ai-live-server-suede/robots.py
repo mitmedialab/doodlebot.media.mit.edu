@@ -536,7 +536,7 @@ class _Coordinator:
                 )
                 print("placement", placement)
                 if placement is None:
-                    scaled_commands = self.scale_commands(qj.drawing, 0.1)
+                    scaled_commands = self.scale_commands(qj.drawing, 0.0001)
                     new_strokes = self.replay_to_world(
                         scaled_commands,
                         0,

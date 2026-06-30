@@ -475,6 +475,8 @@ class Region:
             mask = footprint.mask
             mh, mw = mask.shape
             if mh > rows or mw > cols:
+                print("CANNOT FIT")
+                print(mh, mw, rows, cols)
                 continue  # this rotation can't fit in the region at all
 
             if grid_fft is None:
