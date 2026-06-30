@@ -505,6 +505,7 @@ class _Coordinator:
         for a different ready bot — re-tried on every check-in).
         """
 
+        print("queue", self._queue)
         if not self._queue:
             return
 
@@ -525,6 +526,8 @@ class _Coordinator:
             for bot in candidates:
                 region = self._store.region_for_robot(bot.name)
                 canvas = self._store.canvas_for_robot(bot.name)
+                print("region", region)
+                print("canvas", canvas)
                 assert region is not None
                 assert canvas is not None
                 # The placement search rotates the ink for a tighter fit; that
@@ -542,6 +545,7 @@ class _Coordinator:
                     continue  # doesn't fit even at min scale — try another bot
 
                 region.commit(placement)
+                print(scaled_commands)
                 bot.staged = _StagedJob(
                     job=qj.job,
                     navigate_to=Pose(
