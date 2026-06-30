@@ -286,14 +286,16 @@ class PlacementConfig:
     angles_deg: tuple[float, ...] = tuple(float(a) for a in range(0, 360, 15))
     """Candidate rotations, tried in order (0° first = prefer upright)."""
 
-    strategy: Literal["bottom_left", "scatter"] = "bottom_left"
+    strategy: Literal["origin", "scatter"] = "origin"
     """How to choose among valid poses.
 
-    ``bottom_left`` packs every drawing toward the region's (0,0) corner — dense,
-    but it looks like a print head filling a page. ``scatter`` picks a random
-    valid pose (position + rotation), so drawings appear spread across the region
-    like several artists working it at once; it jams at lower coverage (random
-    sequential packing always does), trading density for that organic look.
+    ``origin`` packs every drawing toward the region's (0,0) corner — the
+    classic Bottom-Left-Fill heuristic, though in this screen-like y-down frame
+    (0,0) is the top-left. Dense, but it looks like a print head filling a page.
+    ``scatter`` picks a random valid pose (position + rotation), so drawings
+    appear spread across the region like several artists working it at once; it
+    jams at lower coverage (random sequential packing always does), trading
+    density for that organic look.
     """
 
 
@@ -373,15 +375,6 @@ class FootprintCache:
 
 
 @dataclass
-class PlacedDrawing:
-    job_id: str
-    anchor_x: float
-    anchor_y: float
-    angle_deg: float
-    commands: list[DrawingCommand]
-
-
-@dataclass
 class Region:
     """A rectangular area of a canvas drawn by one robot, with its occupancy grid."""
 
@@ -414,7 +407,7 @@ class Region:
 
         For each candidate rotation we get the full map of collision-free offsets
         in one shot via FFT cross-correlation (see ``_free_offsets``), then select
-        per ``config.strategy``: ``bottom_left`` keeps the offset nearest the
+        per ``config.strategy``: ``origin`` keeps the offset nearest the
         ``(0,0)`` corner (ties prefer the smaller angle, so drawings stay upright
         when rotating buys nothing); ``scatter`` picks a uniformly random free
         offset for an organic spread. ``search_step_cells`` subsamples the offset
@@ -425,8 +418,8 @@ class Region:
         rotated/rasterized footprints never change, so a shared cache avoids
         recomputing them. When omitted a throwaway cache is used (single call).
 
-        DENSITY EXTENSION POINT (bottom_left): ranking by the *mask's corner*
-        position is a standard bottom-left heuristic — good enough, not optimal,
+        DENSITY EXTENSION POINT (origin): ranking by the *mask's corner*
+        position is a standard bottom-left-fill heuristic — good enough, not optimal,
         and it leaves the canvas fragmented once it fills. If packing density
         becomes a problem, upgrade the ranking to a true minimal-waste score: a
         contact-point metric (favour poses whose perimeter touches existing ink /
@@ -558,7 +551,9 @@ class Marker:
     x: float
     y: float
     size_mm: Optional[float] = None
-    yaw: Optional[float] = None  # radians; derived from the canvas edge, not stored config
+    yaw: Optional[float] = (
+        None  # radians; derived from the canvas edge, not stored config
+    )
 
 
 @dataclass
