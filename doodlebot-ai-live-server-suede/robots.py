@@ -545,9 +545,7 @@ class _Coordinator:
                         0,
                         qj.heading0,
                     )
-                    placement = region.try_place(
-                        new_strokes, rng=self._rng, footprints=qj.footprints
-                    )
+                    placement = region.try_place(new_strokes, rng=self._rng)
                     print("new placement", placement)
 
                 region.commit(placement)
