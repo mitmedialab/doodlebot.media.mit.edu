@@ -539,9 +539,9 @@ class _Coordinator:
                     scaled_commands = self.scale_commands(qj.drawing, 0.1)
                     new_strokes = self.replay_to_world(
                         scaled_commands,
-                        placement.anchor_x,
-                        placement.anchor_y,
-                        placement.angle_deg,
+                        0,
+                        0,
+                        qj.heading0,
                     )
                     placement = region.try_place(
                         new_strokes, rng=self._rng, footprints=qj.footprints
