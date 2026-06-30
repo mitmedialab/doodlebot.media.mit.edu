@@ -35,6 +35,8 @@ from typing import Annotated, Literal, Optional, TypeAlias, Union
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from dataclasses import replace
+
 from . import canvas as canvas_engine
 from .canvas import (
     Canvas,
@@ -462,6 +464,21 @@ class _Coordinator:
 
     # -- internals ---------------------------------------------------------- #
 
+    def scale_commands(commands, scale):
+        scaled = []
+
+        for cmd in commands:
+            match cmd.kind:
+                case "line":
+                    scaled.append(replace(cmd, distance=cmd.distance * scale))
+                case "arc":
+                    scaled.append(replace(cmd, radius=cmd.radius * scale))
+                case _:
+                    # spin or anything else
+                    scaled.append(cmd)
+
+        return scaled
+
     def _assign_locked(self) -> None:
         """Place as many queued jobs as possible onto ready bots. Caller holds lock.
 
@@ -507,7 +524,13 @@ class _Coordinator:
                 )
                 print("placement", placement)
                 if placement is None:
+                    scaled_commands = scale_commands(job.commands, 0.1)
+                    placement = region.try_place(
+                        scaled_commands, rng=self._rng, footprints=qj.footprints
+                    )
+                    print("new placement", placement)
                     continue
+
                 region.commit(placement)
                 bot.staged = _StagedJob(
                     job=qj.job,
