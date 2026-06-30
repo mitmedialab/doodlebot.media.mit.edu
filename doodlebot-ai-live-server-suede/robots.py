@@ -524,7 +524,7 @@ class _Coordinator:
                 )
                 print("placement", placement)
                 if placement is None:
-                    scaled_commands = self.scale_commands(job.commands, 0.1)
+                    scaled_commands = self.scale_commands(qj.strokes, 0.1)
                     placement = region.try_place(
                         scaled_commands, rng=self._rng, footprints=qj.footprints
                     )
