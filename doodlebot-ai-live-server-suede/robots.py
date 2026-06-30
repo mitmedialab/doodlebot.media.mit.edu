@@ -535,8 +535,10 @@ class _Coordinator:
                     qj.strokes, rng=self._rng, footprints=qj.footprints
                 )
                 print("placement", placement)
-                if placement is None:
-                    scaled_commands = self.scale_commands(qj.drawing, 0.0000001)
+                new_strokes = qj.strokes
+                scaled_commands = qj.drawing
+                while placement is None:
+                    scaled_commands = self.scale_commands(scaled_commands, 0.1)
                     new_strokes = self.replay_to_world(
                         scaled_commands,
                         0,
@@ -547,7 +549,6 @@ class _Coordinator:
                         new_strokes, rng=self._rng, footprints=qj.footprints
                     )
                     print("new placement", placement)
-                    continue
 
                 region.commit(placement)
                 bot.staged = _StagedJob(
@@ -557,10 +558,10 @@ class _Coordinator:
                         y=placement.anchor_y,
                         headingDegrees=qj.heading0 + placement.angle_deg,
                     ),
-                    commands=qj.drawing,
+                    commands=scaled_commands,
                 )
                 self.add_drawing(
-                    canvas.id, qj.job.jobId, bot.name, qj.drawing, placement
+                    canvas.id, qj.job.jobId, bot.name, scaled_commands, placement
                 )
                 placed = True
                 break
