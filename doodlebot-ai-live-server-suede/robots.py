@@ -464,7 +464,7 @@ class _Coordinator:
 
     # -- internals ---------------------------------------------------------- #
 
-    def scale_commands(commands, scale):
+    def scale_commands(self, commands, scale):
         scaled = []
 
         for cmd in commands:
@@ -524,7 +524,7 @@ class _Coordinator:
                 )
                 print("placement", placement)
                 if placement is None:
-                    scaled_commands = scale_commands(job.commands, 0.1)
+                    scaled_commands = self.scale_commands(job.commands, 0.1)
                     placement = region.try_place(
                         scaled_commands, rng=self._rng, footprints=qj.footprints
                     )
