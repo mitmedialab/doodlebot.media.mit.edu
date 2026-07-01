@@ -606,7 +606,8 @@ class _Coordinator:
         region: Region,
         qj: "_QueuedJob",
         min_scale: float = 0.4,
-        iters: int = 20,
+        scale_tol: float = 0.02,
+        max_iters: int = 12,
     ) -> tuple[Optional[Placement], list]:
         """Largest uniform scale in ``[min_scale, 1)`` whose footprint fits.
 
@@ -616,11 +617,18 @@ class _Coordinator:
         ``(placement, scaled_commands)`` for that best fit, or ``(None, drawing)``
         if even ``min_scale`` won't fit — in which case the caller leaves the job
         queued rather than drawing an illegibly tiny speck.
+
+        The loop stops once the scale interval is narrower than ``scale_tol``:
+        each step costs a full placement search, and refining scale below a couple
+        of percent moves the footprint by less than an occupancy cell, so extra
+        iterations only burn time. ``max_iters`` is a hard backstop.
         """
         lo, hi = min_scale, 1.0
         best: Optional[Placement] = None
         best_commands: list = qj.drawing
-        for _ in range(iters):
+        iters = 0
+        while hi - lo > scale_tol and iters < max_iters:
+            iters += 1
             mid = (lo + hi) / 2.0
             commands = self.scale_commands(qj.drawing, mid)
             strokes = self.replay_to_world(commands, 0, 0, qj.heading0)
