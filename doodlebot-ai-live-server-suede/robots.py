@@ -41,7 +41,6 @@ from . import canvas as canvas_engine
 from .canvas import (
     Canvas,
     CanvasStore,
-    FootprintCache,
     Marker,
     PlacementConfig,
     Region,
@@ -150,6 +149,8 @@ class PlacementSettings(BaseModel):
     searchStepCells: int = 2
     angleStepDeg: float = 15.0  # rotations tried = 0, step, 2·step, … < 360
     strategy: Literal["origin", "scatter"] = "origin"
+    targetFootprintMm: float = 200.0  # scale each drawing so its longest side is ~this
+    minFootprintScale: float = 0.4  # shrink floor, as a fraction of targetFootprintMm
 
 
 class CanvasConfig(BaseModel):
@@ -193,6 +194,8 @@ def _build_canvas(cfg: CanvasConfig) -> Canvas:
         search_step_cells=cfg.placement.searchStepCells,
         angles_deg=angles,
         strategy=cfg.placement.strategy,
+        target_footprint_mm=cfg.placement.targetFootprintMm,
+        min_footprint_scale=cfg.placement.minFootprintScale,
     )
     return Canvas(
         id=cfg.id,
@@ -283,6 +286,16 @@ class DrawingJob(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+def _span(strokes: list) -> float:
+    """Longest side of the strokes' bounding box (mm), or 0 for no ink."""
+    pts = [p for stroke in strokes for p in stroke]
+    if not pts:
+        return 0.0
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return max(max(xs) - min(xs), max(ys) - min(ys))
+
+
 @dataclass
 class _StagedJob:
     job: DrawingJob
@@ -292,18 +305,19 @@ class _StagedJob:
 
 @dataclass
 class _QueuedJob:
-    """A queued drawing plus its reusable placement inputs.
+    """A queued drawing plus the inputs reused across every placement attempt.
 
-    ``strokes``/``drawing``/``heading0`` are derived from the commands once, and
-    ``footprints`` memoizes the rotated, rasterized footprints — all reused across
-    the many placement attempts a job sees while it waits for a fitting bot.
+    ``drawing`` is the native (lead-in-stripped) commands and ``heading0`` its
+    start heading, both derived once. ``native_span`` is the longest side of the
+    native ink's bounding box — the coordinator divides each canvas's
+    ``target_footprint_mm`` by it to get the uniform scale that sizes the drawing
+    to that canvas (aspect ratio preserved), before the placement search runs.
     """
 
     job: DrawingJob
-    strokes: list
     drawing: list[DrawingCommand]
     heading0: float
-    footprints: FootprintCache
+    native_span: float
 
 
 @dataclass
@@ -363,6 +377,12 @@ class _Coordinator:
                 raise KeyError(canvas_id)
             count = len(self._drawings[canvas_id])
             self._drawings[canvas_id] = []
+            # Also free the reserved space: without this the record goes empty but
+            # every region grid stays full, so nothing new can be placed.
+            canvas = self._store.get(canvas_id)
+            if canvas is not None:
+                for region in canvas.regions:
+                    region.clear()
             return count
 
     # -- enqueue (on approval) ---------------------------------------------- #
@@ -375,15 +395,15 @@ class _Coordinator:
     def enqueue(self, job: DrawingJob) -> None:
         # Derive the placement inputs once; they're reused across every attempt
         # this job makes while queued. Strip the lead-in so we place only the ink
-        # and have the bot navigate straight to the first ink point.
-        strokes = canvas_engine.commands_to_strokes(job.commands)
+        # and have the bot navigate straight to the first ink point. ``native_span``
+        # lets each canvas scale the drawing to its own target footprint size.
         _lead_in, drawing, _p0, heading0 = canvas_engine.split_lead_in(job.commands)
+        native_span = _span(canvas_engine.commands_to_strokes(drawing))
         queued = _QueuedJob(
             job=job,
-            strokes=strokes,
             drawing=drawing,
             heading0=heading0,
-            footprints=FootprintCache(strokes),
+            native_span=native_span,
         )
         with self._lock:
             self._queue.append(queued)
@@ -530,17 +550,12 @@ class _Coordinator:
                 print("canvas", canvas)
                 assert region is not None
                 assert canvas is not None
-                # The placement search rotates the ink for a tighter fit; that
-                # rotation rides on the approach heading, so the drawing commands
-                # are sent unchanged. Footprints are memoized across attempts.
-                placement = region.try_place(
-                    qj.strokes, rng=self._rng, footprints=qj.footprints
-                )
-                scaled_commands = qj.drawing
-                if placement is None:
-                    # Full size won't fit here; shrink only as far as needed to
-                    # land the largest version that fits (or give up on this bot).
-                    placement, scaled_commands = self._place_shrunk(region, qj)
+                # Scale the drawing to this canvas's target footprint size (up or
+                # down, aspect ratio preserved), then place it — shrinking below
+                # the target only as far as needed if it won't fit here. The search
+                # rotates the ink for a tighter fit; that rotation rides on the
+                # approach heading, so the drawing commands are sent unchanged.
+                placement, scaled_commands = self._place_scaled(region, qj)
                 if placement is None:
                     continue  # doesn't fit even at min scale — try another bot
 
@@ -601,28 +616,46 @@ class _Coordinator:
             )
         return world
 
-    def _place_shrunk(
+    def _place_scaled(
         self,
         region: Region,
         qj: "_QueuedJob",
-        min_scale: float = 0.4,
         scale_tol: float = 0.02,
         max_iters: int = 12,
     ) -> tuple[Optional[Placement], list]:
-        """Largest uniform scale in ``[min_scale, 1)`` whose footprint fits.
+        """Place the drawing at this region's target footprint size, shrinking only
+        if it won't fit. Returns ``(placement, scaled_commands)``.
 
-        Footprint-fits-region is monotonic in scale (a smaller drawing fits
-        wherever a larger one does), so we binary-search for the biggest scale
-        that still places instead of collapsing to a fixed fraction. Returns
-        ``(placement, scaled_commands)`` for that best fit, or ``(None, drawing)``
-        if even ``min_scale`` won't fit — in which case the caller leaves the job
-        queued rather than drawing an illegibly tiny speck.
+        The base scale ``target = target_footprint_mm / native_span`` sizes the
+        drawing (uniformly, so aspect ratio is kept and the longest side hits the
+        target) — it may scale up or down. We try that first; if it fits we're
+        done. Otherwise footprint-fits-region is monotonic in size, so we
+        binary-search a fraction ``s`` of the target in ``[min_footprint_scale, 1)``
+        for the largest that still places, and return ``(None, drawing)`` if even
+        ``min_footprint_scale * target`` won't fit (caller leaves the job queued
+        rather than drawing an illegible speck).
 
         The loop stops once the scale interval is narrower than ``scale_tol``:
-        each step costs a full placement search, and refining scale below a couple
-        of percent moves the footprint by less than an occupancy cell, so extra
-        iterations only burn time. ``max_iters`` is a hard backstop.
+        each step costs a full placement search, and refining below a couple of
+        percent moves the footprint less than an occupancy cell. ``max_iters`` is
+        a hard backstop.
         """
+        if qj.native_span <= 0:
+            return None, qj.drawing
+        min_scale = region.config.min_footprint_scale
+        target = region.config.target_footprint_mm / qj.native_span
+
+        def attempt(s: float) -> tuple[Optional[Placement], list]:
+            commands = self.scale_commands(qj.drawing, target * s)
+            strokes = self.replay_to_world(commands, 0, 0, qj.heading0)
+            return region.try_place(strokes, rng=self._rng), commands
+
+        # Target size first (s = 1.0): the common case on a canvas with free space.
+        placement, commands = attempt(1.0)
+        if placement is not None:
+            return placement, commands
+
+        # Doesn't fit at target — shrink below it as little as possible.
         lo, hi = min_scale, 1.0
         best: Optional[Placement] = None
         best_commands: list = qj.drawing
@@ -630,9 +663,7 @@ class _Coordinator:
         while hi - lo > scale_tol and iters < max_iters:
             iters += 1
             mid = (lo + hi) / 2.0
-            commands = self.scale_commands(qj.drawing, mid)
-            strokes = self.replay_to_world(commands, 0, 0, qj.heading0)
-            placement = region.try_place(strokes, rng=self._rng)
+            placement, commands = attempt(mid)
             if placement is not None:
                 best, best_commands, lo = placement, commands, mid  # fits → go bigger
             else:
@@ -849,7 +880,7 @@ class ClearedDrawings(BaseModel):
 
 @router.delete("/api/robots/canvases/{canvas_id}/drawings")
 async def clear_drawings(canvas_id: str, request: Request) -> ClearedDrawings:
-    """Admin: clear all placed drawings from a canvas (does not reset occupancy)."""
+    """Admin: clear all placed drawings from a canvas (also frees the occupancy)."""
     require_admin(request)
     try:
         cleared = coordinator.clear_drawings(canvas_id)

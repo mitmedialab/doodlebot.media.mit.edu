@@ -298,6 +298,19 @@ class PlacementConfig:
     density for that organic look.
     """
 
+    target_footprint_mm: float = 200.0
+    """Desired size of a placed drawing given ample free space: the coordinator
+    uniformly scales each drawing (preserving aspect ratio) so its *longest*
+    footprint dimension is this many mm, then shrinks below it only if it won't
+    fit. Carried here for convenience; the scaling itself lives in ``robots.py``.
+    """
+
+    min_footprint_scale: float = 0.4
+    """Floor for the shrink-to-fit fallback, as a fraction of ``target_footprint_mm``.
+    A drawing that won't fit even at this size is left queued rather than drawn
+    illegibly small. Also carried for convenience; applied in ``robots.py``.
+    """
+
 
 @dataclass
 class Placement:
