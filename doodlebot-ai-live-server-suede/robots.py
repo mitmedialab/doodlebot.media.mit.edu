@@ -44,6 +44,7 @@ from .canvas import (
     Marker,
     PlacementConfig,
     Region,
+    Stroke
     Placement,
 )
 from .common import require_admin
@@ -299,6 +300,7 @@ def _span(strokes: list) -> float:
 @dataclass
 class _StagedJob:
     job: DrawingJob
+    strokes: list[Stroke]
     navigate_to: Pose  # resolved start pose (first ink point + approach heading)
     commands: list[DrawingCommand]  # the drawing with its lead-in stripped off
 
@@ -563,6 +565,7 @@ class _Coordinator:
                 print(scaled_commands)
                 bot.staged = _StagedJob(
                     job=qj.job,
+                    strokes=new_strokes
                     navigate_to=Pose(
                         x=placement.anchor_x,
                         y=placement.anchor_y,
