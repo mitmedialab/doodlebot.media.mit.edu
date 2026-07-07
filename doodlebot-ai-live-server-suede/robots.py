@@ -457,6 +457,7 @@ class _Coordinator:
                 record.ready_since = None
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
+                    strokes=staged.job.strokes
                     navigateTo=staged.navigate_to,
                     commands=staged.commands,
                     exitPath=staged.job.exitPath,
@@ -527,7 +528,6 @@ class _Coordinator:
         for a different ready bot — re-tried on every check-in).
         """
 
-        print("queue", self._queue)
         if not self._queue:
             return
 
@@ -548,8 +548,6 @@ class _Coordinator:
             for bot in candidates:
                 region = self._store.region_for_robot(bot.name)
                 canvas = self._store.canvas_for_robot(bot.name)
-                print("region", region)
-                print("canvas", canvas)
                 assert region is not None
                 assert canvas is not None
                 # Scale the drawing to this canvas's target footprint size (up or
@@ -557,15 +555,16 @@ class _Coordinator:
                 # the target only as far as needed if it won't fit here. The search
                 # rotates the ink for a tighter fit; that rotation rides on the
                 # approach heading, so the drawing commands are sent unchanged.
-                placement, scaled_commands = self._place_scaled(region, qj)
+                placement, scaled_commands, strokes = self._place_scaled(region, qj)
                 if placement is None:
                     continue  # doesn't fit even at min scale — try another bot
 
                 region.commit(placement)
                 print(scaled_commands)
+
                 bot.staged = _StagedJob(
                     job=qj.job,
-                    strokes=None,
+                    strokes=strokes,
                     navigate_to=Pose(
                         x=placement.anchor_x,
                         y=placement.anchor_y,
@@ -643,35 +642,37 @@ class _Coordinator:
         percent moves the footprint less than an occupancy cell. ``max_iters`` is
         a hard backstop.
         """
+
         if qj.native_span <= 0:
-            return None, qj.drawing
+            return None, qj.drawing, qj.strokes
         min_scale = region.config.min_footprint_scale
         target = region.config.target_footprint_mm / qj.native_span
 
         def attempt(s: float) -> tuple[Optional[Placement], list]:
             commands = self.scale_commands(qj.drawing, target * s)
             strokes = self.replay_to_world(commands, 0, 0, qj.heading0)
-            return region.try_place(strokes, rng=self._rng), commands
+            return region.try_place(strokes, rng=self._rng), commands, strokes
 
         # Target size first (s = 1.0): the common case on a canvas with free space.
-        placement, commands = attempt(1.0)
+        placement, commands, strokes = attempt(1.0)
         if placement is not None:
-            return placement, commands
+            return placement, commands, strokes
 
         # Doesn't fit at target — shrink below it as little as possible.
         lo, hi = min_scale, 1.0
         best: Optional[Placement] = None
         best_commands: list = qj.drawing
         iters = 0
+        strokes = qj.strokes
         while hi - lo > scale_tol and iters < max_iters:
             iters += 1
             mid = (lo + hi) / 2.0
-            placement, commands = attempt(mid)
+            placement, commands, strokes = attempt(mid)
             if placement is not None:
                 best, best_commands, lo = placement, commands, mid  # fits → go bigger
             else:
                 hi = mid  # too big → shrink the upper bound
-        return best, best_commands
+        return best, best_commands, strokes
 
     def add_drawing(
         self,
