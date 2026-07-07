@@ -563,6 +563,10 @@ class _Coordinator:
 
                 region.commit(placement)
                 print(scaled_commands)
+<<<<<<< HEAD
+=======
+                print("new strokes", new_strokes)
+>>>>>>> refs/subrepo/doodlebot-ai-live-server-suede/fetch
                 bot.staged = _StagedJob(
                     job=qj.job,
                     strokes=new_strokes,
