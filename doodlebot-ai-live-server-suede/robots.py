@@ -565,7 +565,7 @@ class _Coordinator:
                 print(scaled_commands)
                 bot.staged = _StagedJob(
                     job=qj.job,
-                    strokes=new_strokes
+                    strokes=new_strokes,
                     navigate_to=Pose(
                         x=placement.anchor_x,
                         y=placement.anchor_y,
