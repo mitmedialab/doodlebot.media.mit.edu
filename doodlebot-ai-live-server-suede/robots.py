@@ -127,7 +127,9 @@ class PlacedDrawing:
     angle_deg: float
     commands: list
     strokes: list
-    exit_pose: Pose
+    exit_pose_x: float
+    exit_pose_y: float
+    exit_pose_deg: float
 
 
 class RegionConfig(BaseModel):
@@ -146,7 +148,9 @@ class StrokeConfig(BaseModel):
     anchor_y: float
     angle_deg: float
     strokes: list
-    exit_pose: Pose
+    exit_pose_x: float
+    exit_pose_y: float
+    exit_pose_deg: float
 
 
 class PlacementSettings(BaseModel):
@@ -804,7 +808,9 @@ class _Coordinator:
                 angle_deg=world_heading,
                 commands=commands,
                 strokes=world_strokes,
-                exit_pose=exit_pose,
+                exit_pose_x=exit_pose.x,
+                exit_pose_y=exit_pose.y,
+                exit_pose_deg=exit_pose.headingDegrees,
             )
         )
 
@@ -957,7 +963,9 @@ async def get_canvases(request: Request) -> Canvases:
                         angle_deg=s.angle_deg,
                         strokes=s.strokes,
                         robot_name=s.robot_name,
-                        exit_pose=s.exit_pose,
+                        exit_pose_x=s.exit_pose_x,
+                        exit_pose_y=s.exit_pose_y,
+                        exit_pose_deg=s.exit_pose_deg,
                     )
                     for s in drawings
                 ],
