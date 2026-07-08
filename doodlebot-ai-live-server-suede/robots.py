@@ -554,7 +554,7 @@ class _Coordinator:
                     staged.navigate_to.y,
                     staged.navigate_to.headingDegrees,
                 )
-
+                exit_pose = compute_exit_pose(strokes, canvas.markers, region)
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
                     navigateTo=staged.navigate_to,
