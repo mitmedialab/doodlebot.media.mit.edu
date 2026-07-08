@@ -842,7 +842,7 @@ def enqueue_drawing(
     job = DrawingJob(
         jobId=coordinator.next_job_id(),
         commands=commands,
-        exitPose=exitPose or None,
+        exitPose=exit_pose or None,
         sourceFilename=source_filename,
     )
     coordinator.enqueue(job)
