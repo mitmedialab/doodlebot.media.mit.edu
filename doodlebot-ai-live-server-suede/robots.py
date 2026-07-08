@@ -743,8 +743,14 @@ class _Coordinator:
         a hard backstop.
         """
 
+        strokes = self.replay_to_world(
+            qj.drawing,
+            0,
+            0,
+            qj.heading0,
+        )
         if qj.native_span <= 0:
-            return None, qj.drawing, qj.job.strokes
+            return None, qj.drawing, strokes
         min_scale = region.config.min_footprint_scale
         target = region.config.target_footprint_mm / qj.native_span
 
@@ -763,7 +769,12 @@ class _Coordinator:
         best: Optional[Placement] = None
         best_commands: list = qj.drawing
         iters = 0
-        strokes = qj.job.strokes
+        strokes = self.replay_to_world(
+            qj.drawing,
+            0,
+            0,
+            qj.heading0,
+        )
         while hi - lo > scale_tol and iters < max_iters:
             iters += 1
             mid = (lo + hi) / 2.0
