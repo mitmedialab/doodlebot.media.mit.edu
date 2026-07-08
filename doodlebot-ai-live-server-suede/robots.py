@@ -799,20 +799,36 @@ class _Coordinator:
         )
         if canvas_id not in self._drawings:
             self._drawings[canvas_id] = []
-        self._drawings[canvas_id].append(
-            PlacedDrawing(
-                job_id=job_id,
-                robot_name=robot_name,
-                anchor_x=placement.anchor_x,
-                anchor_y=placement.anchor_y,
-                angle_deg=world_heading,
-                commands=commands,
-                strokes=world_strokes,
-                exit_pose_x=exit_pose.x,
-                exit_pose_y=exit_pose.y,
-                exit_pose_deg=exit_pose.headingDegrees,
+        if exit_pose:
+            self._drawings[canvas_id].append(
+                PlacedDrawing(
+                    job_id=job_id,
+                    robot_name=robot_name,
+                    anchor_x=placement.anchor_x,
+                    anchor_y=placement.anchor_y,
+                    angle_deg=world_heading,
+                    commands=commands,
+                    strokes=world_strokes,
+                    exit_pose_x=exit_pose.x,
+                    exit_pose_y=exit_pose.y,
+                    exit_pose_deg=exit_pose.headingDegrees,
+                )
             )
-        )
+        else:
+            self._drawings[canvas_id].append(
+                PlacedDrawing(
+                    job_id=job_id,
+                    robot_name=robot_name,
+                    anchor_x=placement.anchor_x,
+                    anchor_y=placement.anchor_y,
+                    angle_deg=world_heading,
+                    commands=commands,
+                    strokes=world_strokes,
+                    exit_pose_x=0,
+                    exit_pose_y=0,
+                    exit_pose_deg=0,
+                )
+            )
 
 
 class RobotPool(BaseModel):
