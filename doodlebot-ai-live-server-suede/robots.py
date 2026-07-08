@@ -282,6 +282,7 @@ class DrawingJob(BaseModel):
 
     jobId: str
     commands: list[DrawingCommand]
+    strokes: list[Stroke]
     exitPose: Optional[Pose] = None
     sourceFilename: Optional[str] = None
 
@@ -735,7 +736,7 @@ class _Coordinator:
         """
 
         if qj.native_span <= 0:
-            return None, qj.drawing, qj.strokes
+            return None, qj.drawing, qj.job.strokes
         min_scale = region.config.min_footprint_scale
         target = region.config.target_footprint_mm / qj.native_span
 
@@ -754,7 +755,7 @@ class _Coordinator:
         best: Optional[Placement] = None
         best_commands: list = qj.drawing
         iters = 0
-        strokes = qj.strokes
+        strokes = qj.job.strokes
         while hi - lo > scale_tol and iters < max_iters:
             iters += 1
             mid = (lo + hi) / 2.0
@@ -829,6 +830,7 @@ coordinator = _Coordinator(DEFAULT_CANVASES)
 
 def enqueue_drawing(
     commands: list[DrawingCommand],
+    strokes: list[Stroke],
     exit_pose: Optional[Pose] = None,
     source_filename: Optional[str] = None,
 ) -> DrawingJob:
@@ -841,6 +843,7 @@ def enqueue_drawing(
 
     job = DrawingJob(
         jobId=coordinator.next_job_id(),
+        strokes=strokes,
         commands=commands,
         exitPose=exit_pose or None,
         sourceFilename=source_filename,
