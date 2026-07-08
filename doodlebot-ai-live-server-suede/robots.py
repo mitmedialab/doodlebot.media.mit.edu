@@ -804,7 +804,7 @@ class _Coordinator:
                 angle_deg=world_heading,
                 commands=commands,
                 strokes=world_strokes,
-                exit_pose=exit_pose,,
+                exit_pose=exit_pose,
             )
         )
 
@@ -957,7 +957,7 @@ async def get_canvases(request: Request) -> Canvases:
                         angle_deg=s.angle_deg,
                         strokes=s.strokes,
                         robot_name=s.robot_name,
-                        exit_pose=s.exit_pose
+                        exit_pose=s.exit_pose,
                     )
                     for s in drawings
                 ],
