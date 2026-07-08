@@ -457,7 +457,7 @@ class _Coordinator:
                 record.ready_since = None
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
-                    strokes=staged.job.strokes
+                    strokes=staged.job.strokes,
                     navigateTo=staged.navigate_to,
                     commands=staged.commands,
                     exitPath=staged.job.exitPath,
