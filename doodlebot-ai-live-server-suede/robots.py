@@ -49,6 +49,10 @@ from .canvas import (
 )
 from .common import require_admin
 
+import numpy as np
+from shapely.geometry import LineString, Point as ShapelyPoint
+from shapely.ops import unary_union
+
 router = APIRouter()
 
 
@@ -265,7 +269,7 @@ class CheckIn:
         jobId: str
         navigateTo: Pose
         commands: list[DrawingCommand]
-        exitPath: list[DrawingCommand] = []
+        exitPose: Pose
 
 
 CheckInResponse: TypeAlias = Annotated[
@@ -278,7 +282,7 @@ class DrawingJob(BaseModel):
 
     jobId: str
     commands: list[DrawingCommand]
-    exitPath: list[DrawingCommand] = []
+    exitPose: Pose
     sourceFilename: Optional[str] = None
 
 
@@ -330,6 +334,88 @@ class _RobotRecord:
     last_seen: float
     ready_since: Optional[float]  # monotonic time the bot entered "ready", else None
     staged: Optional[_StagedJob] = None
+
+
+def compute_exit_pose(
+    strokes,
+    markers: list[Marker],
+    allowed_region: Region | None = None,
+    robot_radius: float = 0.08,
+    min_marker_distance: float = 0.20,
+    max_marker_distance: float = 0.60,
+    distance_step: float = 0.05,
+) -> Pose | None:
+
+    drawing = unary_union(
+        [
+            LineString(stroke).buffer(robot_radius)
+            for stroke in strokes
+            if len(stroke) >= 2
+        ]
+    )
+
+    robot = np.array(strokes[-1][-1])
+
+    best_pose = None
+    best_distance = float("inf")
+
+    for marker in markers:
+
+        if marker.yaw is None:
+            continue
+
+        marker_pos = np.array([marker.x, marker.y])
+
+        normal = np.array(
+            [
+                math.cos(marker.yaw),
+                math.sin(marker.yaw),
+            ]
+        )
+
+        for d in np.arange(
+            min_marker_distance,
+            max_marker_distance + distance_step,
+            distance_step,
+        ):
+
+            candidate = marker_pos - d * normal
+            point = ShapelyPoint(*candidate)
+
+            # Stay inside the robot's region
+            if allowed_region is not None:
+                if not (
+                    allowed_region.x
+                    <= candidate[0]
+                    <= allowed_region.x + allowed_region.width
+                    and allowed_region.y
+                    <= candidate[1]
+                    <= allowed_region.y + allowed_region.height
+                ):
+                    continue
+
+            # Stay off the completed drawing
+            if drawing.contains(point):
+                continue
+
+            travel = np.linalg.norm(candidate - robot)
+
+            if travel < best_distance:
+
+                heading = math.atan2(
+                    marker.y - candidate[1],
+                    marker.x - candidate[0],
+                )
+
+                best_distance = travel
+
+                best_pose = Pose(
+                    x=float(candidate[0]),
+                    y=float(candidate[1]),
+                    headingDegrees=math.degrees(heading),
+                )
+
+    return best_pose
 
 
 class _Coordinator:
@@ -450,17 +536,22 @@ class _Coordinator:
 
             self._assign_locked()
 
+            region = self._store.region_for_robot(req.name)
+            canvas = self._store.canvas_for_robot(req.name)
             if req.status == "ready" and record.staged is not None:
                 staged = record.staged
                 record.staged = None
                 record.status = "drawing"
                 record.ready_since = None
+                exit_pose = compute_exit_pose(
+                    staged.job.strokes, canvas.markers, region
+                )
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
                     strokes=staged.job.strokes,
                     navigateTo=staged.navigate_to,
                     commands=staged.commands,
-                    exitPath=staged.job.exitPath,
+                    exitPose=exit_pose,
                 )
 
             return CheckIn.Wait()
@@ -751,7 +842,7 @@ def enqueue_drawing(
     job = DrawingJob(
         jobId=coordinator.next_job_id(),
         commands=commands,
-        exitPath=exit_path or [],
+        exitPose=exitPose or None,
         sourceFilename=source_filename,
     )
     coordinator.enqueue(job)
@@ -912,7 +1003,7 @@ async def list_robots(request: Request) -> RobotPool:
 
 class EnqueueDrawing(BaseModel):
     commands: list[DrawingCommand]
-    exitPath: list[DrawingCommand] = []
+    exitPose: Pose
     sourceFilename: Optional[str] = None
 
 
@@ -924,7 +1015,7 @@ async def post_job(payload: EnqueueDrawing, request: Request) -> DrawingJob:
         raise HTTPException(status_code=400, detail="No drawing commands")
     return enqueue_drawing(
         commands=payload.commands,
-        exit_path=payload.exitPath,
+        exit_pose=payload.exitPose,
         source_filename=payload.sourceFilename,
     )
 
