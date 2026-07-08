@@ -1018,6 +1018,7 @@ async def post_job(payload: EnqueueDrawing, request: Request) -> DrawingJob:
         raise HTTPException(status_code=400, detail="No drawing commands")
     return enqueue_drawing(
         commands=payload.commands,
+        strokes=payload.strokes,
         exit_pose=payload.exitPose,
         source_filename=payload.sourceFilename,
     )
