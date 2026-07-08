@@ -829,7 +829,7 @@ coordinator = _Coordinator(DEFAULT_CANVASES)
 
 def enqueue_drawing(
     commands: list[DrawingCommand],
-    exit_path: Optional[list[DrawingCommand]] = None,
+    exit_pose: Optional[Pose] = None,
     source_filename: Optional[str] = None,
 ) -> DrawingJob:
     """Queue a vectorized drawing for placement on the next-best ready bot.
