@@ -543,7 +543,10 @@ class _Coordinator:
                 record.status = "drawing"
                 record.ready_since = None
                 strokes = self.replay_to_world(
-                    staged.commands, 0, 0, staged.job.heading0
+                    staged.commands,
+                    staged.navigate_to.x,
+                    staged.navigate_to.y,
+                    staged.navigate_to.headingDegrees,
                 )
                 exit_pose = compute_exit_pose(strokes, canvas.markers, region)
                 return CheckIn.Draw(
