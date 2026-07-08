@@ -347,7 +347,7 @@ def compute_exit_pose(
     allowed_region: Region | None = None,
     robot_radius: float = 0.08,
     min_marker_distance: float = 0.05,
-    max_marker_distance: float = 0.2,
+    max_marker_distance: float = 0.5,
     distance_step: float = 0.005,
 ) -> Pose | None:
 
