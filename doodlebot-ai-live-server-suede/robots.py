@@ -269,7 +269,7 @@ class CheckIn:
         jobId: str
         navigateTo: Pose
         commands: list[DrawingCommand]
-        exitPose: Pose
+        exitPose: Optional[Pose] = None
 
 
 CheckInResponse: TypeAlias = Annotated[
@@ -282,7 +282,7 @@ class DrawingJob(BaseModel):
 
     jobId: str
     commands: list[DrawingCommand]
-    exitPose: Pose
+    exitPose: Optional[Pose] = None
     sourceFilename: Optional[str] = None
 
 
@@ -1003,7 +1003,7 @@ async def list_robots(request: Request) -> RobotPool:
 
 class EnqueueDrawing(BaseModel):
     commands: list[DrawingCommand]
-    exitPose: Pose
+    exitPose: Optional[Pose] = None
     sourceFilename: Optional[str] = None
 
 
