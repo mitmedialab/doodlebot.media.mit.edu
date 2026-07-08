@@ -346,9 +346,9 @@ def compute_exit_pose(
     markers: list[Marker],
     allowed_region: Region | None = None,
     robot_radius: float = 0.08,
-    min_marker_distance: float = 0.20,
-    max_marker_distance: float = 0.60,
-    distance_step: float = 0.05,
+    min_marker_distance: float = 0.05,
+    max_marker_distance: float = 0.2,
+    distance_step: float = 0.005,
 ) -> Pose | None:
 
     drawing = unary_union(
