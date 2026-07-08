@@ -127,6 +127,7 @@ class PlacedDrawing:
     angle_deg: float
     commands: list
     strokes: list
+    exit_pose: Pose
 
 
 class RegionConfig(BaseModel):
@@ -145,6 +146,7 @@ class StrokeConfig(BaseModel):
     anchor_y: float
     angle_deg: float
     strokes: list
+    exit_pose: Pose
 
 
 class PlacementSettings(BaseModel):
@@ -548,7 +550,7 @@ class _Coordinator:
                     staged.navigate_to.y,
                     staged.navigate_to.headingDegrees,
                 )
-                exit_pose = compute_exit_pose(strokes, canvas.markers, region)
+
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
                     navigateTo=staged.navigate_to,
@@ -664,6 +666,7 @@ class _Coordinator:
                     ),
                     commands=scaled_commands,
                 )
+                exit_pose = compute_exit_pose(strokes, canvas.markers, region)
                 self.add_drawing(
                     canvas.id,
                     qj.job.jobId,
@@ -671,6 +674,7 @@ class _Coordinator:
                     scaled_commands,
                     placement,
                     qj.heading0,
+                    exit_pose,
                 )
                 placed = True
                 break
@@ -774,6 +778,7 @@ class _Coordinator:
         commands: list,
         placement: Placement,
         heading0: float,
+        exit_pose: Pose,
     ) -> None:
         # The reserved footprint is the ink at orientation ``heading0 + angle``
         # (the lead-in heading baked into the strokes, plus the placement search's
@@ -799,6 +804,7 @@ class _Coordinator:
                 angle_deg=world_heading,
                 commands=commands,
                 strokes=world_strokes,
+                exit_pose=exit_pose,,
             )
         )
 
@@ -951,6 +957,7 @@ async def get_canvases(request: Request) -> Canvases:
                         angle_deg=s.angle_deg,
                         strokes=s.strokes,
                         robot_name=s.robot_name,
+                        exit_pose=s.exit_pose
                     )
                     for s in drawings
                 ],
