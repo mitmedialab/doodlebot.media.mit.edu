@@ -729,8 +729,8 @@ class _Coordinator:
                 )
                 drawing_strokes = self.replay_to_world(
                     commands=scaled_commands,
-                    x=placement.anchor_x,
-                    y=placement.anchor_y,
+                    start_x=placement.anchor_x,
+                    start_y=placement.anchor_y,
                     heading_deg=staged_angle,
                 )
                 exit_pose = compute_exit_pose(drawing_strokes, canvas.markers, region)
