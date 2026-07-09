@@ -353,7 +353,7 @@ def compute_exit_pose(
     marker_weight: float = 1.0,
     center_weight: float = 2.0,
     debug_plot: bool = False,
-) -> Pose | None: 
+) -> Pose | None:
 
     drawing = unary_union(
         [
@@ -475,7 +475,6 @@ def compute_exit_pose(
                     y=float(candidate[1]),
                     headingDegrees=math.degrees(heading),
                 )
-
 
     return best_pose
 
@@ -711,7 +710,7 @@ class _Coordinator:
                 # the target only as far as needed if it won't fit here. The search
                 # rotates the ink for a tighter fit; that rotation rides on the
                 # approach heading, so the drawing commands are sent unchanged.
-                placement, scaled_commands, strokes = self._place_scaled(region, qj)
+                placement, scaled_commands = self._place_scaled(region, qj)
                 if placement is None:
                     continue  # doesn't fit even at min scale — try another bot
 
@@ -729,10 +728,10 @@ class _Coordinator:
                     commands=scaled_commands,
                 )
                 drawing_strokes = self.replay_to_world(
-                    scaled_commands,
-                    placement.anchor_x,
+                    commands=scaled_commands,
+                    x=placement.anchor_x,
                     y=placement.anchor_y,
-                    staged_angle,
+                    heading_deg=staged_angle,
                 )
                 exit_pose = compute_exit_pose(drawing_strokes, canvas.markers, region)
                 self.add_drawing(
@@ -814,19 +813,19 @@ class _Coordinator:
             qj.heading0,
         )
         if qj.native_span <= 0:
-            return None, qj.drawing, strokes
+            return None, qj.drawing
         min_scale = region.config.min_footprint_scale
         target = region.config.target_footprint_mm / qj.native_span
 
         def attempt(s: float) -> tuple[Optional[Placement], list]:
             commands = self.scale_commands(qj.drawing, target * s)
             strokes = self.replay_to_world(commands, 0, 0, qj.heading0)
-            return region.try_place(strokes, rng=self._rng), commands, strokes
+            return region.try_place(strokes, rng=self._rng), commands
 
         # Target size first (s = 1.0): the common case on a canvas with free space.
-        placement, commands, strokes = attempt(1.0)
+        placement, commands = attempt(1.0)
         if placement is not None:
-            return placement, commands, strokes
+            return placement, commands
 
         # Doesn't fit at target — shrink below it as little as possible.
         lo, hi = min_scale, 1.0
@@ -842,12 +841,12 @@ class _Coordinator:
         while hi - lo > scale_tol and iters < max_iters:
             iters += 1
             mid = (lo + hi) / 2.0
-            placement, commands, strokes = attempt(mid)
+            placement, commands = attempt(mid)
             if placement is not None:
                 best, best_commands, lo = placement, commands, mid  # fits → go bigger
             else:
                 hi = mid  # too big → shrink the upper bound
-        return best, best_commands, strokes
+        return best, best_commands
 
     def add_drawing(
         self,
