@@ -25,4 +25,5 @@ services:
       - ./pending:/app/server/pending
       - ./sketches:/app/server/sketches
       - ./presets.json:/app/server/presets.json
+      - ./v2_data:/app/server/v2_data
     restart: unless-stopped

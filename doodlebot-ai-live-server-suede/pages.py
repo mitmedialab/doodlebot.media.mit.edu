@@ -39,6 +39,11 @@ async def draw_page() -> FileResponse:
     return await _serve("index.html")
 
 
+@router.get("/old")
+async def old_page() -> FileResponse:
+    return await _serve("old.html")
+
+
 @router.get("/gallery")
 async def gallery_page() -> FileResponse:
     return await _serve("gallery.html")
@@ -62,6 +67,16 @@ async def robots_page() -> FileResponse:
 @router.get("/robot.png")
 async def robot_image() -> FileResponse:
     return await _serve("robot.png")
+
+
+@router.get("/full.png")
+async def full_image() -> FileResponse:
+    return await _serve("full.png")
+
+
+@router.get("/elements.png")
+async def elements_image() -> FileResponse:
+    return await _serve("elements.png")
 
 
 @router.api_route("/static/bust", methods=["GET", "POST"])

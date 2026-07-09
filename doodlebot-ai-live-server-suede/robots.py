@@ -642,6 +642,24 @@ class _Coordinator:
                 )
             return RobotPool(bots=bots, queuedJobs=len(self._queue))
 
+    def assigned_robot(self, job_id: str) -> Optional[str]:
+        """The name of the robot a queued job has landed on, or None if it's
+        still waiting for a bot (or unknown).
+
+        A job counts as assigned once it's either staged on a bot (a placement
+        was found and the bot will collect it on its next check-in) or already
+        recorded as a placed drawing. Callers (e.g. the v2 pipeline) poll this to
+        learn when a real Doodlebot has taken the drawing."""
+        with self._lock:
+            for record in self._robots.values():
+                if record.staged is not None and record.staged.job.jobId == job_id:
+                    return record.name
+            for placed_list in self._drawings.values():
+                for placed in placed_list:
+                    if placed.job_id == job_id:
+                        return placed.robot_name
+            return None
+
     # -- internals ---------------------------------------------------------- #
 
     def scale_commands(self, commands, scale):

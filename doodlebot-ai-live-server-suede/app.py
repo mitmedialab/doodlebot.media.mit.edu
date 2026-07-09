@@ -23,6 +23,7 @@ from . import (
     combine,
     vectorize,
     robots,
+    v2,
 )
 
 app = FastAPI()
@@ -46,6 +47,7 @@ for module in (
     combine,
     vectorize,
     robots,
+    v2,
 ):
     app.include_router(module.router)
 
