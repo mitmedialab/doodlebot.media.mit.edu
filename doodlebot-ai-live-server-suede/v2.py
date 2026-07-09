@@ -360,9 +360,7 @@ class Manager:
     def _persist(self, sketch: Sketch) -> None:
         """Write the sketch's current state + event log to disk. Small JSON, so
         a synchronous write on the event loop is fine."""
-        (SKETCH_META_DIR / f"{sketch.id}.json").write_text(
-            json.dumps(sketch.to_meta())
-        )
+        (SKETCH_META_DIR / f"{sketch.id}.json").write_text(json.dumps(sketch.to_meta()))
 
     # -- event emission -----------------------------------------------------
 
@@ -442,9 +440,7 @@ class Manager:
         next-best ready bot on its ~1s check-in. RobotKind is currently a single
         "doughnut", so that's what we report; when the pool grows, map the
         assigned bot to its kind here."""
-        job = await asyncio.to_thread(
-            enqueue_drawing, commands, None, source
-        )
+        job = await asyncio.to_thread(enqueue_drawing, commands, None, source)
 
         # Poll for a real assignment. The job remains queued in the coordinator
         # even past the timeout, so a bot that comes online later still draws it;
@@ -469,7 +465,7 @@ class Manager:
 
         for sketch in trio:
             sketch.state = "complete"
-            self._emit(sketch, SSEPayload(sketch=sketch.id, robot="doughnut"))
+            self._emit(sketch, SSEPayload(sketch=sketch.id, robot=assigned))
 
     async def _combine_and_vectorize(
         self, image_paths: list[Path]
@@ -548,7 +544,13 @@ def _vectorize_for_robot_and_svg(png_bytes: bytes) -> tuple[list[dict], str]:
     pil.load()
     result = run_vectorization(np.asarray(pil))
     commands = result["low_geometry"]
-    svg = commands_to_svg(commands, show_pen_up=False, stroke_width=2.0)
+    svg = commands_to_svg(
+        commands,
+        show_pen_up=False,
+        stroke_width=4.0,
+        stroke="black",
+        show_endpoints=False,
+    )
     return commands, svg
 
 

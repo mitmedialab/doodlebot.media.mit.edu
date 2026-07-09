@@ -101,12 +101,22 @@ def _render_drawing_parts(
     stroke_width,
     pen_up_stroke_width,
     show_pen_up,
+    stroke=None,
+    show_endpoints=True,
 ):
     """SVG fragments for one drawing -- pen-up dashes, drawn primitives
-    rainbow-colored by execution order, start dot and end ring -- in the
-    drawing's native coordinate system. Caller is responsible for the
-    outer <svg>, the background <rect>, and any wrapping <g transform>
-    that places the drawing in the final layout.
+    colored by execution order, start dot and end ring -- in the drawing's
+    native coordinate system. Caller is responsible for the outer <svg>, the
+    background <rect>, and any wrapping <g transform> that places the drawing
+    in the final layout.
+
+    ``stroke`` overrides the per-primitive color: pass a CSS color (e.g.
+    ``"black"``) to draw every primitive in that single color, or leave it
+    ``None`` to keep the default rainbow / hue ramp by execution order.
+
+    ``show_endpoints`` draws the start dot + end ring that mark draw order;
+    set it ``False`` when the SVG represents the finished artwork the user
+    sees (those markers aren't part of the drawing).
     """
     parts = []
 
@@ -123,8 +133,7 @@ def _render_drawing_parts(
     n = len(drawn)
     parts.append('<g fill="none" stroke-linecap="round">')
     for i, d in enumerate(drawn):
-        hue = 360.0 * i / max(n, 1)
-        color = _hsl(hue)
+        color = stroke if stroke is not None else _hsl(360.0 * i / max(n, 1))
         if d["kind"] == "line":
             p0, p1 = d["p0"], d["p1"]
             parts.append(
@@ -160,7 +169,7 @@ def _render_drawing_parts(
                 )
     parts.append("</g>")
 
-    if drawn:
+    if drawn and show_endpoints:
         first_p0 = drawn[0]["p0"]
         last_p1 = drawn[-1]["p1"]
         parts.append(
@@ -184,8 +193,16 @@ def commands_to_svg(
     pen_up_stroke_width=0.5,
     padding=8.0,
     show_pen_up=True,
+    stroke: Optional[str] = None,
+    show_endpoints: bool = True,
 ):
-    """Render a command list to an SVG file. Returns the SVG string."""
+    """Render a command list to an SVG file. Returns the SVG string.
+
+    ``stroke`` forces a single stroke color for every drawn primitive (e.g.
+    ``"black"``); left ``None`` it keeps the default rainbow coloring by
+    execution order. ``show_endpoints`` toggles the start-dot / end-ring
+    draw-order markers — set ``False`` for a clean finished-artwork render.
+    """
     drawn, pen_up, (minx, miny, maxx, maxy) = _simulate(
         commands, start_pos, start_heading
     )
@@ -210,6 +227,8 @@ def commands_to_svg(
             stroke_width,
             pen_up_stroke_width,
             show_pen_up,
+            stroke=stroke,
+            show_endpoints=show_endpoints,
         )
     )
     parts.append("</svg>")
