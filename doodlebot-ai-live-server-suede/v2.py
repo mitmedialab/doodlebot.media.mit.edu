@@ -109,7 +109,7 @@ class SSEPayload(BaseModel):
     status: SketchStatus | None = None
     companions: list[str] | None = None
     vectorization: str | None = None
-    robot: RobotKind | None = None
+    robot: str | None = None
 
     def encode(self) -> str:
         return self.model_dump_json(exclude_none=True)
