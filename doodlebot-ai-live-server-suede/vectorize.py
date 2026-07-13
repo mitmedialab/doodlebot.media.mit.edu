@@ -10,12 +10,27 @@ from PIL import Image
 import asyncio
 from functools import wraps
 import io
-from typing import Sequence
+from typing import Sequence, TypedDict
 
 router = APIRouter()
 
 
-def _commands_to_jsonable(commands: Sequence[DrawingCommand]):
+class VectorizationResult(TypedDict):
+    """Return shape of :func:`run_vectorization`.
+
+    ``low_geometry`` / ``high_geometry`` are the drawing commands as plain,
+    JSON-able dicts (the vectorizer's ``DrawingCommand`` *TypedDict* form, with
+    numpy scalars unwrapped) — NOT the Pydantic ``DrawingCommand`` models used by
+    ``robots.py``. Callers that dispatch to a robot must parse them into those
+    models first (see ``robots.parse_commands``)."""
+
+    low_geometry: list[DrawingCommand]
+    high_geometry: list[DrawingCommand]
+    svg: str
+    low_geometry_svg: str
+
+
+def _commands_to_jsonable(commands: Sequence[DrawingCommand]) -> list[DrawingCommand]:
     """Strip numpy scalar wrappers so DrawingCommand dicts serialize cleanly."""
     out = []
     for cmd in commands:
@@ -33,7 +48,7 @@ def _commands_to_jsonable(commands: Sequence[DrawingCommand]):
     return out
 
 
-def run_vectorization(image_array: np.ndarray):
+def run_vectorization(image_array: np.ndarray) -> VectorizationResult:
     _, _, _, _, _, low_geometry_optimized, high_geometry_optimized = default_pipeline(
         image_array
     )
