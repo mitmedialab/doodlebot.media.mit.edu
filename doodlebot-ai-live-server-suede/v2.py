@@ -5,7 +5,8 @@ server (the one that exercised the re-worked SvelteKit client). It contributes
 the same four routes and speaks the same wire protocol, but replaces the test
 server's fakery with the real pipeline:
 
-  * sketches are persisted to disk (not held in memory) and served from there;
+  * sketch/vectorization image blobs are persisted to S3 (storage.py) and served
+    via presigned-URL redirects; only per-sketch meta JSON stays on local disk;
   * approved sketches are grouped into trios *incrementally* — a submitter is
     told about each companion the moment it appears, rather than waiting for the
     whole trio to complete;
@@ -33,22 +34,23 @@ import hashlib
 import io
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator, Literal, Coroutine, Any
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel
 
 from .arc_line_vectorization_suede.visualize import commands_to_svg
 from .combine import Combine
-from .config import COMBINED_DIR
 from .robots import DrawingCommand, coordinator, enqueue_drawing, parse_commands
+from .storage import StoredResource, storage
 from .vectorize import run_vectorization
 
 # --- Tunables --------------------------------------------------------------
@@ -72,7 +74,7 @@ draw circular arcs and lines.
 Circular arcs are preferred, since they only require a single command, \
 while a line effectively requires two commands (one command to spin in place to orient \
 and then the actual line to draw).
-Limit your final drawing to 30 or less shapes (lines + arcs) to allow for fast drawing.
+Limit your final drawing to 20 or less shapes (individual lines + arcs) to allow for extra fast drawing.
 """
 
 # Robot dispatch: after vectorization, the drawing is enqueued for a real
@@ -90,13 +92,21 @@ HEARTBEAT = 15.0  # seconds between SSE keep-alive comments
 # Retries around the (network/CPU-bound) combine + vectorize work.
 PIPELINE_ATTEMPTS = 2
 
-# DESIGN NOTE (data dir): v2 keeps its state in its own directory so it never
-# collides with the v1 admin flow's pending/ + sketches/ trees. Everything here
-# is content-addressed and safe to back with S3/NFS later.
+# Presigned-URL redirects for /resource (see get_resource). We mint a URL valid
+# for PRESIGN_TTL and cache it per resource, so repeated requests for the same
+# blob redirect to the *same* S3 URL — letting a browser reuse its cached bytes.
+# We stop handing out a cached URL (and cap the redirect's own max-age) once it's
+# within PRESIGN_REFRESH_MARGIN of expiry, so a client never follows a dead URL.
+PRESIGN_TTL = int(os.environ.get("V2_PRESIGN_TTL", "7200"))  # 2h
+PRESIGN_REFRESH_MARGIN = int(os.environ.get("V2_PRESIGN_REFRESH_MARGIN", "600"))
+
+# DESIGN NOTE (data dir): v2 keeps its metadata in its own directory so it never
+# collides with the v1 admin flow's pending/ + sketches/ trees. Image blobs
+# (served resources + combined debug snapshots) now live in S3 via storage.py;
+# only the per-sketch meta JSON stays on local disk.
 V2_DATA_DIR = Path(os.environ.get("V2_DATA_DIR", "v2_data"))
-RESOURCES_DIR = V2_DATA_DIR / "resources"  # served PNG/SVG blobs, named {sha}.{ext}
 SKETCH_META_DIR = V2_DATA_DIR / "sketches"  # per-sketch JSON: state + event log
-for _d in (V2_DATA_DIR, RESOURCES_DIR, SKETCH_META_DIR, COMBINED_DIR):
+for _d in (V2_DATA_DIR, SKETCH_META_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
@@ -162,20 +172,6 @@ _LOADABLE_STATES = {
     "robot-selection",
     "complete",
 }
-
-
-@dataclass
-class Resource:
-    """Something the ``/resource`` route can serve directly as an <img> src.
-
-    Backed by a file on disk; the bytes are read on demand so we don't keep
-    every blob resident in memory."""
-
-    content_type: str
-    path: Path
-
-    def read(self) -> bytes:
-        return self.path.read_bytes()
 
 
 @dataclass
@@ -250,18 +246,21 @@ class Manager:
     """Single source of truth for clients, their sketches, servable resources,
     and the cross-client grouping of approved sketches into trios.
 
-    DESIGN NOTE (durability): sketch content, metadata, event logs and served
-    resources are all persisted to disk, so ``/resource`` and the reconnect
-    replay survive a restart. What does NOT survive a restart is *in-flight
-    pipeline execution* — a sketch caught mid-combine won't resume on its own.
-    Restarts should be rare; a durable job queue (or moving the pipeline onto a
-    worker + DB) is the recommended next step.
+    DESIGN NOTE (durability): sketch metadata and event logs persist to local
+    disk; served image blobs persist to S3 (storage.py). So ``/resource`` and the
+    reconnect replay survive a restart. What does NOT survive a restart is
+    *in-flight pipeline execution* — a sketch caught mid-combine won't resume on
+    its own. Restarts should be rare; a durable job queue (or moving the pipeline
+    onto a worker + DB) is the recommended next step.
     """
 
     def __init__(self) -> None:
         self.clients: dict[str, Client] = {}
         self.sketches: dict[str, Sketch] = {}
-        self.resources: dict[str, Resource] = {}
+        self.resources: dict[str, StoredResource] = {}
+        # Cache of minted presigned URLs: resource_id -> (url, created_monotonic).
+        # See resource_redirect() for the refresh/expiry policy.
+        self._presigned: dict[str, tuple[str, float]] = {}
         # The single trio currently being assembled. A new one is started as
         # soon as the previous one fills.
         self._forming = _Group(self)
@@ -273,12 +272,11 @@ class Manager:
 
     def _load_from_disk(self) -> None:
         """Rebuild the served resources and each client's sketch history so
-        reconnecting clients can be replayed after a restart."""
-        for path in RESOURCES_DIR.iterdir():
-            if path.is_file():
-                ct = _content_type_for(path)
-                if ct:
-                    self.resources[path.stem] = Resource(content_type=ct, path=path)
+        reconnecting clients can be replayed after a restart.
+
+        The resource catalogue is enumerated from S3 (blocking, but this runs at
+        construction time before the event loop is serving)."""
+        self.resources = storage.list_resources()
 
         metas: list[Sketch] = []
         for path in sorted(SKETCH_META_DIR.glob("*.json")):
@@ -321,23 +319,52 @@ class Manager:
 
     # -- resources ----------------------------------------------------------
 
-    def get_resource(self, resource_id: str) -> Resource | None:
+    def get_resource(self, resource_id: str) -> StoredResource | None:
         return self.resources.get(resource_id)
 
+    def resource_redirect(self, resource_id: str) -> tuple[str, int] | None:
+        """Resolve a resource to a presigned S3 URL to redirect to, plus the
+        max-age (seconds) the redirect itself may be cached for.
+
+        Returns ``None`` for an unknown resource. A URL is reused from the cache
+        until it's within PRESIGN_REFRESH_MARGIN of expiry, so repeated requests
+        for the same blob point a browser at the same S3 URL (cache-friendly);
+        the returned max-age always leaves at least PRESIGN_REFRESH_MARGIN of the
+        URL's life, so a cached redirect never resolves to a dead URL.
+
+        generate_presigned_url is a local computation (no network), so this is
+        safe to call straight from the event loop."""
+        stored = self.resources.get(resource_id)
+        if stored is None:
+            return None
+        now = time.monotonic()
+        cached = self._presigned.get(resource_id)
+        if cached is None or now - cached[1] >= PRESIGN_TTL - PRESIGN_REFRESH_MARGIN:
+            url = storage.presigned_url(stored.key, expires=PRESIGN_TTL)
+            self._presigned[resource_id] = (url, now)
+            age = 0.0
+        else:
+            url, created = cached
+            age = now - created
+        max_age = int(PRESIGN_TTL - PRESIGN_REFRESH_MARGIN - age)
+        return url, max(max_age, 0)
+
     def _store_resource(self, body: bytes, content_type: str) -> str:
-        """Content-address ``body``, write it to the resources dir, and register
-        it as servable. Returns the resource id (sha256 hex). Idempotent."""
-        resource_id = hashlib.sha256(body).hexdigest()
+        """Content-address ``body``, upload it to S3, and register it as
+        servable. Returns the resource id (sha256 hex). Idempotent.
+
+        Blocking (S3 PUT) — call it via ``asyncio.to_thread`` from async code."""
+        resource_id = storage.put_resource(body, content_type)
         if resource_id not in self.resources:
-            ext = _ext_for(content_type)
-            path = RESOURCES_DIR / f"{resource_id}{ext}"
-            path.write_bytes(body)
-            self.resources[resource_id] = Resource(content_type=content_type, path=path)
+            self.resources[resource_id] = StoredResource(
+                key=storage.resource_key(resource_id, content_type),
+                content_type=content_type,
+            )
         return resource_id
 
     # -- sketches -----------------------------------------------------------
 
-    def store_sketch(self, client_id: str, data_url: str) -> str:
+    async def store_sketch(self, client_id: str, data_url: str) -> str:
         """Persist a submitted sketch and kick off its pipeline. Returns the
         sha256 content id. Idempotent for a re-submitted identical sketch."""
         content_type, body = _decode_data_url(data_url)
@@ -349,12 +376,17 @@ class Manager:
             # Same content submitted again — hand back the existing id untouched.
             return sketch_id
 
-        # The sketch PNG is itself a servable resource, addressed by its hash.
-        self._store_resource(body, content_type)
-
+        # Reserve the sketch synchronously (before any await) so two concurrent
+        # identical submissions dedup to one pipeline rather than racing.
         sketch = Sketch(id=sketch_id, client_id=client_id, created=_now())
         self.sketches[sketch_id] = sketch
         client.sketch_ids.append(sketch_id)
+
+        # The sketch PNG is itself a servable resource, addressed by its hash.
+        # Upload off the event loop (S3 PUT is blocking). The POST only returns
+        # after this completes, so by the time the client has the id and requests
+        # /resource, the blob is registered and live.
+        await asyncio.to_thread(self._store_resource, body, content_type)
 
         # The creation event materialises the pipeline on the client. (A live
         # submission already created it eagerly and treats this as a no-op; a
@@ -411,10 +443,12 @@ class Manager:
         the same vectorization resource, dispatch it to a real robot, then
         complete the pipeline once a bot has claimed the drawing."""
         trio = [self.sketches[sid] for sid in trio_ids]
-        image_paths = [self.resources[sid].path for sid in trio_ids]
+        trio_resources = [self.resources[sid] for sid in trio_ids]
 
         try:
-            vectorization_id, commands = await self._combine_and_vectorize(image_paths)
+            vectorization_id, commands = await self._combine_and_vectorize(
+                trio_resources
+            )
         except Exception as exc:  # noqa: BLE001
             # DESIGN NOTE (failure surface): the wire protocol has no "failed"
             # status, so a hard failure here currently leaves the trio stuck in
@@ -474,7 +508,7 @@ class Manager:
             self._emit(sketch, SSEPayload(sketch=sketch.id, robot=assigned))
 
     async def _combine_and_vectorize(
-        self, image_paths: list[Path]
+        self, resources: list[StoredResource]
     ) -> tuple[str, list[DrawingCommand]]:
         """Run GPT Image 1 over the trio and vectorize the result. Returns the
         served SVG's resource id plus the low-geometry drawing commands (for
@@ -483,14 +517,20 @@ class Manager:
         last_exc: Exception | None = None
         for attempt in range(1, PIPELINE_ATTEMPTS + 1):
             try:
-                # 1) Combine the trio into a single PNG (reuses combine.py).
+                # 1) Pull the trio's PNG bytes from S3, then combine them into a
+                #    single PNG (reuses combine.py's bytes-based entrypoint).
+                images = await asyncio.to_thread(
+                    lambda: [storage.read(r.key) for r in resources]
+                )
                 image_b64 = await asyncio.to_thread(
-                    Combine.openai, COMBINE_MODEL, image_paths, COMBINE_PROMPT
+                    Combine.openai_s3, COMBINE_MODEL, images, COMBINE_PROMPT
                 )
                 combined_png = base64.b64decode(image_b64)
 
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-                (COMBINED_DIR / f"combined_{ts}.png").write_bytes(combined_png)
+                await asyncio.to_thread(
+                    storage.put_combined_debug, combined_png, f"combined_{ts}.png"
+                )
 
                 # 2) Vectorize the combined drawing into robot strokes: the
                 #    low-geometry commands drive the robot; we also render them to
@@ -498,8 +538,8 @@ class Manager:
                 commands, svg = await asyncio.to_thread(
                     _vectorize_for_robot_and_svg, combined_png
                 )
-                vectorization_id = self._store_resource(
-                    svg.encode("utf-8"), "image/svg+xml"
+                vectorization_id = await asyncio.to_thread(
+                    self._store_resource, svg.encode("utf-8"), "image/svg+xml"
                 )
                 return vectorization_id, commands
             except Exception as exc:  # noqa: BLE001
@@ -510,7 +550,7 @@ class Manager:
 
     # -- task bookkeeping ---------------------------------------------------
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -519,7 +559,7 @@ class Manager:
 # --- moderation ------------------------------------------------------------
 
 
-async def _classify(resource: Resource | None) -> SketchStatus:
+async def _classify(resource: StoredResource | None) -> SketchStatus:
     """Classify a submitted sketch as approved / innapropriate / complex.
 
     DESIGN NOTE (moderation): this is the seam where real moderation goes. The
@@ -566,17 +606,6 @@ def _vectorize_for_robot_and_svg(png_bytes: bytes) -> tuple[list[DrawingCommand]
 
 # --- misc helpers ----------------------------------------------------------
 
-_EXT_BY_CT = {"image/png": ".png", "image/svg+xml": ".svg", "image/jpeg": ".jpg"}
-_CT_BY_EXT = {ext: ct for ct, ext in _EXT_BY_CT.items()}
-
-
-def _ext_for(content_type: str) -> str:
-    return _EXT_BY_CT.get(content_type, ".bin")
-
-
-def _content_type_for(path: Path) -> str | None:
-    return _CT_BY_EXT.get(path.suffix)
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -618,19 +647,25 @@ async def request_client() -> ClientResponse:
 
 @router.post("/sketch", response_model=SketchResponse)
 async def store_sketch(request: SketchRequest) -> SketchResponse:
-    sketch_id = manager.store_sketch(request.client, request.sketch)
+    sketch_id = await manager.store_sketch(request.client, request.sketch)
     return SketchResponse(sketch=sketch_id)
 
 
 @router.get("/resource/{resource_id}")
 async def get_resource(resource_id: str) -> Response:
-    resource = manager.get_resource(resource_id)
-    if resource is None:
+    """Redirect to a presigned S3 URL rather than proxying the bytes, so the
+    server never streams blob traffic. The redirect is cacheable only for as long
+    as its target URL stays valid (see Manager.resource_redirect); the S3 object
+    itself carries an immutable, year-long Cache-Control so the browser caches the
+    bytes under that URL."""
+    redirect = manager.resource_redirect(resource_id)
+    if redirect is None:
         raise HTTPException(status_code=404, detail="unknown resource")
-    return Response(
-        content=resource.read(),
-        media_type=resource.content_type,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    url, max_age = redirect
+    return RedirectResponse(
+        url,
+        status_code=307,
+        headers={"Cache-Control": f"public, max-age={max_age}"},
     )
 
 

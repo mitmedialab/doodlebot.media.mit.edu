@@ -48,6 +48,27 @@ class Combine:
         return resp.data[0].b64_json
 
     @classmethod
+    def openai_s3(cls, model_id: str, images: list[bytes], prompt: str) -> str:
+        """Same as ``openai`` but takes raw PNG bytes (e.g. pulled from S3)
+        instead of disk paths, so the v2 pipeline never needs the trio on local
+        disk. The OpenAI SDK accepts ``(filename, bytes, content_type)`` tuples
+        anywhere it accepts a file handle."""
+        openai = client("openai")
+        files: list[Any] = [
+            (f"image_{i}.png", body, "image/png") for i, body in enumerate(images)
+        ]
+        resp = openai.images.edit(
+            model=model_id,
+            image=files if len(files) > 1 else files[0],
+            prompt=prompt,
+            size="1024x1024",
+            quality="medium",
+        )
+        if not resp.data or resp.data[0].b64_json is None:
+            raise RuntimeError("OpenAI returned no image")
+        return resp.data[0].b64_json
+
+    @classmethod
     def gemini(cls, model_id: str, image_paths: list[Path], prompt: str) -> str:
         gemini = client("gemini")
         contents: list[Any] = [prompt]

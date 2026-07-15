@@ -15,6 +15,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-test}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
+      S3_BUCKET: ${S3_BUCKET:-}
       # Front-end pages are fetched from here and cached in-container on first
       # request (POST /static/bust clears the cache).
       STATIC_HOST: ${STATIC_HOST:-https://mitmedialab.github.io/doodlebot-ai-live}
