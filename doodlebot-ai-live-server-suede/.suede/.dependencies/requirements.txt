@@ -66,4 +66,5 @@ uvloop==0.22.1
 watchfiles==1.2.0
 websockets==16.0
 shapely>=2.0.0
+opencv-python-headless==5.0.0.93
 boto3==1.43.48
