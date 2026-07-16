@@ -126,6 +126,7 @@ class SSEPayload(BaseModel):
     companions: list[str] | None = None
     vectorization: str | None = None
     robot: str | None = None
+    color: str | None = None
 
     def encode(self) -> str:
         return self.model_dump_json(exclude_none=True)
@@ -502,10 +503,19 @@ class Manager:
 
         if assigned is not None:
             print(f"[v2] {job.jobId} claimed by robot '{assigned}'")
-
-        for sketch in trio:
-            sketch.state = "complete"
-            self._emit(sketch, SSEPayload(sketch=sketch.id, robot=assigned))
+            for sketch in trio:
+                sketch.state = "complete"
+                color = coordinator.color_for_robot(assigned)
+                self._emit(
+                    sketch, SSEPayload(sketch=sketch.id, robot=assigned, color=color)
+                )
+        else:
+            for sketch in trio:
+                sketch.state = "complete"
+                self._emit(
+                    sketch,
+                    SSEPayload(sketch=sketch.id, robot="<invalid>"),
+                )
 
     async def _combine_and_vectorize(
         self, resources: list[StoredResource]
