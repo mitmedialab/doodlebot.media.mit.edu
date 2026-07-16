@@ -430,7 +430,7 @@ class PlacementConfig:
     angles_deg: tuple[float, ...] = tuple(float(a) for a in range(0, 360, 15))
     """Candidate rotations, tried in order (0° first = prefer upright)."""
 
-    strategy: Literal["origin", "scatter"] = "origin"
+    strategy: Literal["origin", "scatter"] = "scatter"
     """How to choose among valid poses.
 
     ``origin`` packs every drawing toward the region's (0,0) corner — the

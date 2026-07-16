@@ -160,7 +160,7 @@ class PlacementSettings(BaseModel):
     clearanceMm: float = 8.0
     searchStepCells: int = 2
     angleStepDeg: float = 15.0  # rotations tried = 0, step, 2·step, … < 360
-    strategy: Literal["origin", "scatter"] = "origin"
+    strategy: Literal["origin", "scatter"] = "scatter"
     targetFootprintMm: float = 200.0  # scale each drawing so its longest side is ~this
     minFootprintScale: float = 0.4  # shrink floor, as a fraction of targetFootprintMm
 
@@ -1213,14 +1213,42 @@ async def checkin(payload: CheckIn.Request) -> CheckInResponse:
     return coordinator.check_in(payload)
 
 
+def _placement_settings(pc: PlacementConfig) -> PlacementSettings:
+    """Recover the wire ``PlacementSettings`` from a region's engine ``PlacementConfig``.
+
+    The inverse of the transform in ``_build_canvas``: that expands ``angleStepDeg``
+    into the explicit ``angles_deg`` tuple (0, step, 2·step, …), so the step is just
+    the spacing between its first two entries; every other field maps one-to-one.
+    """
+    angles = pc.angles_deg
+    if len(angles) >= 2:
+        angle_step = angles[1] - angles[0]
+    elif angles:
+        angle_step = 360.0
+    else:
+        angle_step = PlacementSettings().angleStepDeg
+    return PlacementSettings(
+        cellMm=pc.cell_mm,
+        penMm=pc.pen_mm,
+        clearanceMm=pc.clearance_mm,
+        searchStepCells=pc.search_step_cells,
+        angleStepDeg=angle_step,
+        strategy=pc.strategy,
+        targetFootprintMm=pc.target_footprint_mm,
+        minFootprintScale=pc.min_footprint_scale,
+    )
+
+
 class Canvases(BaseModel):
-    class Item(BaseModel):
-        id: str
-        width: float
-        height: float
-        markers: list[ArucoMarker]
-        regions: list[RegionConfig]
-        drawings: list[PlacedDrawing]
+    class Item(CanvasConfig):
+        """A canvas's full config (as POSTed) plus live per-region occupancy.
+
+        Subclasses ``CanvasConfig`` so the GET response round-trips everything a
+        POST accepts — notably ``placement`` and ``general_buffer``, which the old
+        hand-rolled shape dropped — and adds the one field that only exists at read
+        time: how full each region currently is.
+        """
+
         freeFractionByRegion: dict[str, float]
 
     canvases: list["Canvases.Item"]
@@ -1231,18 +1259,24 @@ Canvases.model_rebuild()
 
 @router.get("/api/robots/canvases")
 async def get_canvases(request: Request) -> Canvases:
-    """Admin: the configured canvases with live per-region occupancy."""
+    """Admin: the configured canvases (full config) with live per-region occupancy."""
     require_admin(request)
     items: list[Canvases.Item] = []
     for c in coordinator.canvases():
-        drawings = []
-        if c.id in coordinator._drawings:
-            drawings = coordinator._drawings[c.id]
+        drawings = coordinator._drawings.get(c.id, [])
+        # Placement is shared across a canvas's regions; recover it from the first
+        # (or fall back to defaults for a region-less canvas).
+        placement = (
+            _placement_settings(c.regions[0].config)
+            if c.regions
+            else PlacementSettings()
+        )
         items.append(
             Canvases.Item(
                 id=c.id,
                 width=c.width,
                 height=c.height,
+                general_buffer=c.general_buffer,
                 markers=[
                     ArucoMarker(
                         id=m.id,
@@ -1264,7 +1298,8 @@ async def get_canvases(request: Request) -> Canvases:
                     )
                     for r in c.regions
                 ],
-                drawings=[drawing for drawing in drawings],
+                placement=placement,
+                drawings=list(drawings),
                 freeFractionByRegion={r.id: r.free_fraction for r in c.regions},
             )
         )
