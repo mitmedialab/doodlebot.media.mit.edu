@@ -82,6 +82,20 @@ class S3Storage:
             )
         return resource_id
 
+    def put_resource_at(self, resource_id: str, body: bytes, content_type: str) -> None:
+        """Upload ``body`` under a *caller-chosen* resource id rather than a
+        content hash. Used for admin-gated vectorizations, whose id is a stable
+        locator minted before the final bytes exist (the admin may hand back a
+        simplified command set), so the served blob is filled in at approval time
+        under an id the admin already holds. Overwrites any existing object."""
+        self._s3.put_object(
+            Bucket=self.bucket,
+            Key=self.resource_key(resource_id, content_type),
+            Body=body,
+            ContentType=content_type,
+            CacheControl=_IMMUTABLE,
+        )
+
     def put_combined_debug(self, png_bytes: bytes, name: str) -> None:
         """Fire-and-forget archive of a combined PNG (replaces COMBINED_DIR)."""
         self._s3.put_object(
