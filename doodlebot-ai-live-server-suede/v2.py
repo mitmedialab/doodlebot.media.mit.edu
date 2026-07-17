@@ -178,6 +178,11 @@ class ClientSSEPayload(BaseModel):
     spelling. Optional fields are omitted on the wire via ``exclude_none``."""
 
     sketch: str
+    # The session the sketch was submitted under. Stamped onto every payload for a
+    # sketch (see Manager._emit) so it rides along on the client feed — the default
+    # is only a placeholder for construction and for old persisted events. Always a
+    # real token on the wire for a live sketch.
+    session: str = ""
     status: SketchStatus | None = None
     companions: list[str] | None = None
     vectorization: str | None = None
@@ -328,6 +333,10 @@ class Sketch:
     id: str
     client_id: str
     created: str
+    # The active session this sketch was submitted under. Stamped onto every
+    # payload emitted for the sketch (see Manager._emit) so the client feed always
+    # carries it. Persisted so it survives a restart.
+    session: str = ""
     state: ServerState = "approval-pending"
     # The admin's moderation verdict, or None while still awaiting one. Distinct
     # from `state` (which a rejected sketch leaves at "approval-pending"): this is
@@ -343,6 +352,7 @@ class Sketch:
             "id": self.id,
             "client_id": self.client_id,
             "created": self.created,
+            "session": self.session,
             "state": self.state,
             "verdict": self.verdict,
             "events": [e.model_dump(exclude_none=True) for e in self.events],
@@ -354,6 +364,7 @@ class Sketch:
             id=meta["id"],
             client_id=meta["client_id"],
             created=meta.get("created", ""),
+            session=meta.get("session", ""),
             state=meta.get("state", "approval-pending"),
             verdict=meta.get("verdict"),
             events=[ClientSSEPayload(**e) for e in meta.get("events", [])],
@@ -657,7 +668,9 @@ class Manager:
 
         # Reserve the sketch synchronously (before any await) so two concurrent
         # identical submissions dedup to one pipeline rather than racing.
-        sketch = Sketch(id=sketch_id, client_id=client_id, created=_now())
+        sketch = Sketch(
+            id=sketch_id, client_id=client_id, created=_now(), session=session
+        )
         self.sketches[sketch_id] = sketch
         client.sketch_ids.append(sketch_id)
 
@@ -683,6 +696,10 @@ class Manager:
 
     def _emit(self, sketch: Sketch, payload: ClientSSEPayload) -> None:
         """Append to the sketch's log, persist, and fan out to live feeds."""
+        # Stamp the sketch's session onto every payload here — the single emit
+        # choke point — so the session rides along on every client event without
+        # each call site having to thread it through.
+        payload.session = sketch.session
         sketch.events.append(payload)
         self._persist(sketch)
         data = payload.encode()
