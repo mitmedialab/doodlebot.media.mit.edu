@@ -281,6 +281,7 @@ class CheckIn:
         action: Literal["draw"] = "draw"
         jobId: str
         navigateTo: Pose
+        navigateFrom: Pose
         commands: list[DrawingCommand]
         exitPose: Optional[Pose] = None
 
@@ -318,6 +319,7 @@ def _span(strokes: list) -> float:
 class _StagedJob:
     job: DrawingJob
     navigate_to: Pose  # resolved start pose (first ink point + approach heading)
+    navigate_from: Pose
     commands: list[DrawingCommand]  # the drawing with its lead-in stripped off
 
 
@@ -717,6 +719,7 @@ class _Coordinator:
                 return CheckIn.Draw(
                     jobId=staged.job.jobId,
                     navigateTo=staged.navigate_to,
+                    navigateFrom=staged.navigate_from,
                     commands=staged.commands,
                     exitPose=exit_pose,
                 )
@@ -902,14 +905,28 @@ class _Coordinator:
                     continue  # won't fit even at min scale — try another bot
 
                 region.commit(placement)
-
                 staged_angle = qj.heading0 + placement.angle_deg
+
+                _, navigateFrom = canvas_engine.commands_to_strokes_with_pose(
+                    scaled_commands,
+                    Pose(
+                        x=placement.anchor_x,
+                        y=placement.anchor_y,
+                        headingDegrees=staged_angle,
+                    ),
+                )
+
                 bot.staged = _StagedJob(
                     job=qj.job,
                     navigate_to=Pose(
                         x=placement.anchor_x,
                         y=placement.anchor_y,
                         headingDegrees=staged_angle,
+                    ),
+                    navigate_from=Pose(
+                        x=navigateFrom.x,
+                        y=navigateFrom.y,
+                        headingDegrees=navigateFrom.headingDegrees,
                     ),
                     commands=scaled_commands,
                 )

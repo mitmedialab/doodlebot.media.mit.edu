@@ -64,6 +64,11 @@ async def robots_page() -> FileResponse:
     return await _serve("robots.html")
 
 
+@router.get("/viewer")
+async def viewer_page() -> FileResponse:
+    return await _serve("viewer.html")
+
+
 @router.get("/robot.png")
 async def robot_image() -> FileResponse:
     return await _serve("robot.png")
