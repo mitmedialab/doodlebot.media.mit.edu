@@ -24,6 +24,8 @@ mounted by release/app.py alongside the existing v1 routes:
   POST /sketch                 -> { "sketch": "<sha256>" }   (body: client + data URL)
   GET  /resource/{resource_id} -> the sketch PNG or the vectorization SVG
   GET  /events?client=<id>     -> text/event-stream of SSEPayload objects
+  GET  /events/all             -> public text/event-stream of every SSEPayload
+  GET  /events/all/clear        -> clear the gallery feed's replay backlog (admin)
 
 Admin routes (gated by ``require_admin``; a separate admin front-end drives them):
 
@@ -159,6 +161,12 @@ for _d in (V2_DATA_DIR, SKETCH_META_DIR):
 # Unlike in-flight pipeline state, this is durable *config*, so it is loaded on
 # startup and rewritten on every change — it survives restarts.
 SESSIONS_FILE = V2_DATA_DIR / "sessions.json"
+
+# When the admin last cleared the public gallery feed (JSON: {"cleared_at": "<iso>"}).
+# The per-sketch event logs stay on disk to keep per-client replay working, so this
+# durable cutoff is how a clear survives a restart: on load, only sketches created
+# after it re-seed the gallery's replay history (see Manager._load_from_disk).
+HISTORY_CLEARED_FILE = V2_DATA_DIR / "gallery_history_cleared_at.json"
 
 
 # --- Wire types (must mirror the client's types) ---------------------------
@@ -451,6 +459,19 @@ class Manager:
         # in the running loop (see _combine_gate).
         self._combine_gate_sem: "asyncio.Semaphore | None" = None
         self._combine_gate_loop: "asyncio.AbstractEventLoop | None" = None
+        # Live subscribers to the public "all clients" feed (see subscribe_all).
+        # Every ClientSSEPayload emitted for any client is fanned out here too, so
+        # a gallery can watch the whole system. Unauthenticated: anyone may listen.
+        self._all_subscribers: set["asyncio.Queue[str]"] = set()
+        # Append-only log of every ClientSSEPayload ever emitted, already encoded,
+        # replayed to each new "all" subscriber. Reuses the encode _emit already
+        # does (zero steady-state cost) and is seeded from disk at load, so a fresh
+        # gallery connection is backfilled without re-serializing per connection.
+        self._all_history: list[str] = []
+        # Durable cutoff for the gallery feed: an admin "clear" stamps this with the
+        # current time, and only sketches created after it re-seed _all_history on
+        # load. Empty ⇒ never cleared, replay everything. Loaded in _load_from_disk.
+        self._history_cleared_at: str = ""
         # -- admin approval state --------------------------------------------
         # Live admin SSE subscribers (see subscribe_admin). A fresh connection is
         # replayed the current backlog below, then fed live notifications.
@@ -478,6 +499,7 @@ class Manager:
         construction time before the event loop is serving)."""
         self.resources = storage.list_resources()
         self._load_sessions()
+        self._load_history_cutoff()
 
         metas: list[Sketch] = []
         for path in sorted(SKETCH_META_DIR.glob("*.json")):
@@ -491,6 +513,13 @@ class Manager:
                 continue
             self.sketches[sketch.id] = sketch
             self.ensure_client(sketch.client_id).sketch_ids.append(sketch.id)
+            # Seed the public feed's replay log in the same sketch-by-sketch order
+            # the per-client replay uses, so a gallery is backfilled after a
+            # restart just as a reconnecting client is. Sketches from before the
+            # last admin "clear" are skipped so a clear survives a restart.
+            if not self._history_cleared_at or sketch.created > self._history_cleared_at:
+                for payload in sketch.events:
+                    self._all_history.append(payload.encode())
 
     # -- sessions -----------------------------------------------------------
 
@@ -508,6 +537,35 @@ class Manager:
         SESSIONS_FILE.write_text(
             json.dumps({"sessions": sorted(self.active_sessions)})
         )
+
+    # -- gallery history cutoff --------------------------------------------
+
+    def _load_history_cutoff(self) -> None:
+        """Restore the last gallery-clear timestamp from disk (empty if never)."""
+        if not HISTORY_CLEARED_FILE.exists():
+            return
+        try:
+            data = json.loads(HISTORY_CLEARED_FILE.read_text())
+            self._history_cleared_at = data.get("cleared_at", "")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[v2] could not load history cutoff from {HISTORY_CLEARED_FILE.name}: {exc}")
+
+    def clear_all_history(self) -> int:
+        """Clear the public gallery feed's replay backlog and persist a durable
+        cutoff so the clear survives a restart. Returns how many frames were
+        dropped. Live subscribers already connected keep streaming; only the
+        history replayed to *future* connections is emptied.
+
+        The per-sketch event logs are left intact (per-client replay still needs
+        them) — the cutoff is what keeps those pre-clear events out of the gallery
+        feed on the next load."""
+        dropped = len(self._all_history)
+        self._history_cleared_at = _now()
+        HISTORY_CLEARED_FILE.write_text(
+            json.dumps({"cleared_at": self._history_cleared_at})
+        )
+        self._all_history.clear()
+        return dropped
 
     def is_active_session(self, session: str) -> bool:
         """Whether a submission's session token is currently active. An empty or
@@ -550,6 +608,28 @@ class Manager:
         client = self.clients.get(client_id)
         if client is not None:
             client.subscribers.discard(queue)
+
+    # -- public "all clients" feed ------------------------------------------
+
+    def subscribe_all(self) -> "asyncio.Queue[str]":
+        """Register a live subscriber to the public feed of every client's events,
+        pre-loaded with the full replayed history. Synchronous (no awaits) so the
+        history snapshot + registration is atomic against concurrently-emitted live
+        events — no frame is dropped or double-delivered across the handoff.
+
+        The feed is public (no client scoping, no auth) and carries the same
+        ClientSSEPayloads as the per-client feeds — nothing about *which* client
+        they belong to. Replay frames are pre-encoded, so a connect (or an
+        EventSource auto-reconnect) copies them straight in without re-serializing.
+        """
+        queue: "asyncio.Queue[str]" = asyncio.Queue()
+        self._all_subscribers.add(queue)
+        for data in self._all_history:
+            queue.put_nowait(data)
+        return queue
+
+    def unsubscribe_all(self, queue: "asyncio.Queue[str]") -> None:
+        self._all_subscribers.discard(queue)
 
     # -- admin feed ---------------------------------------------------------
 
@@ -707,6 +787,12 @@ class Manager:
         if owner is not None:
             for queue in owner.subscribers:
                 queue.put_nowait(data)
+        # Mirror onto the public "all clients" feed and its replay log. Same
+        # encoded payload; no client identity is added — whatever is on
+        # ClientSSEPayload is enough.
+        self._all_history.append(data)
+        for queue in self._all_subscribers:
+            queue.put_nowait(data)
 
     # -- sketch approval (admin) -------------------------------------------
 
@@ -1240,6 +1326,53 @@ async def events(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/events/all")
+async def events_all(request: Request) -> StreamingResponse:
+    """Public SSE feed of every client's ClientSSEPayloads, for a gallery view.
+
+    No auth and no client scoping — anyone may listen, and the frames are the same
+    ClientSSEPayloads pushed to the per-client feeds. On connect, the full history
+    of every client's events is replayed first, then live updates follow."""
+    queue = manager.subscribe_all()
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"  # comment frame; ignored by EventSource
+                    continue
+                yield f"data: {data}\n\n"
+        finally:
+            manager.unsubscribe_all(queue)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.api_route("/events/all/clear", methods=["GET", "POST"])
+async def clear_events_all(request: Request) -> Response:
+    """Clear the public gallery feed's replay backlog. Admin-only.
+
+    Exposed over GET (like /static/bust) so an admin can trigger it by navigating
+    to /events/all/clear?token=<ADMIN_TOKEN> in a browser. The clear is durable —
+    a snapshot backlog won't come back after a restart. Live subscribers keep
+    streaming; only the history replayed to future connections is emptied."""
+    require_admin(request)
+    dropped = manager.clear_all_history()
+    return Response(
+        f"Cleared {dropped} event(s) from the gallery history feed.\n",
+        media_type="text/plain",
     )
 
 
