@@ -180,15 +180,13 @@ def build_test_shape(shape: TestShape) -> list[DrawingCommand]:
             [(0.0, 0.0), (100.0, 0.0), (50.0, height), (0.0, 0.0)]
         )
     if shape == "sine_wave":
-        amplitude, width, cycles, samples = 25.0, 200.0, 2, 48
-        points = [
-            (
-                width * i / samples,
-                amplitude * math.sin(2.0 * math.pi * cycles * i / samples),
-            )
-            for i in range(samples + 1)
+        # A row of alternating half-circles: not a true sine, but it evokes the
+        # wavy shape at one arc per hump instead of ~a hundred line segments.
+        radius, humps = 50.0, 4
+        return [
+            ArcCommand(radius=radius, degrees=180.0 if i % 2 == 0 else -180.0)
+            for i in range(humps)
         ]
-        return _polyline_to_commands(points)
     raise ValueError(f"unknown test shape: {shape!r}")
 
 
