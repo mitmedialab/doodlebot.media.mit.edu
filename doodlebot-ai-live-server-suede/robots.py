@@ -128,6 +128,70 @@ def parse_commands(raw: Iterable[Mapping[str, Any]]) -> list[DrawingCommand]:
     return _DRAWING_COMMANDS_ADAPTER.validate_python(list(raw))
 
 
+# --------------------------------------------------------------------------- #
+# Test shapes — canned drawings for exercising a robot end-to-end
+#
+# These let an admin confirm a newly-online bot can render a vectorization
+# without pushing a real sketch through the combine/vectorize pipeline. They are
+# ordinary DrawingCommands, so they flow through the exact same placement +
+# dispatch path as a real drawing (see build_test_shape / enqueue_drawing).
+# --------------------------------------------------------------------------- #
+
+TestShape: TypeAlias = Literal["line", "square", "triangle", "sine_wave"]
+
+
+def _polyline_to_commands(points: Sequence[tuple[float, float]]) -> list[DrawingCommand]:
+    """Turn a pen-down polyline (local mm, starting at the pen origin facing +x)
+    into spin+line drawing commands.
+
+    Each segment becomes a Spin to face it, then a pen-down Line of its length —
+    the exact inverse of ``canvas.commands_to_strokes``'s turtle integration, so
+    the bot redraws the polyline. Absolute size is irrelevant: the coordinator
+    rescales the drawing to the target region's footprint at placement time."""
+    commands: list[DrawingCommand] = []
+    heading = 0.0
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            continue  # skip zero-length segments (e.g. a repeated point)
+        target = math.degrees(math.atan2(dy, dx))
+        turn = (target - heading + 180.0) % 360.0 - 180.0  # shortest turn to face it
+        if abs(turn) > 1e-9:
+            commands.append(SpinCommand(degrees=turn))
+        commands.append(LineCommand(distance=length, penDown=True))
+        heading = target
+    return commands
+
+
+def build_test_shape(shape: TestShape) -> list[DrawingCommand]:
+    """Drawing commands for a simple calibration shape. Built at an arbitrary base
+    size (~100mm); placement scales it to the target region's ``target_footprint``,
+    so only the proportions here matter."""
+    if shape == "line":
+        return _polyline_to_commands([(0.0, 0.0), (100.0, 0.0)])
+    if shape == "square":
+        return _polyline_to_commands(
+            [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+        )
+    if shape == "triangle":
+        height = 100.0 * math.sqrt(3.0) / 2.0  # equilateral, base 100 along +x
+        return _polyline_to_commands(
+            [(0.0, 0.0), (100.0, 0.0), (50.0, height), (0.0, 0.0)]
+        )
+    if shape == "sine_wave":
+        amplitude, width, cycles, samples = 25.0, 200.0, 2, 48
+        points = [
+            (
+                width * i / samples,
+                amplitude * math.sin(2.0 * math.pi * cycles * i / samples),
+            )
+            for i in range(samples + 1)
+        ]
+        return _polyline_to_commands(points)
+    raise ValueError(f"unknown test shape: {shape!r}")
+
+
 class ArucoMarker(BaseModel):
     """A fiducial marker at a known global position the bot localizes against."""
 
@@ -298,6 +362,10 @@ class DrawingJob(BaseModel):
     commands: list[DrawingCommand]
     exitPose: Optional[Pose] = None
     sourceFilename: Optional[str] = None
+    robotName: Optional[str] = None
+    """If set, only this bot may draw the job — the placement search considers it
+    alone and the job never reroutes to a different bot (used by the admin test-draw
+    flow to target one robot). None ⇒ the normal next-best-ready-bot selection."""
 
 
 # --------------------------------------------------------------------------- #
@@ -766,6 +834,20 @@ class _Coordinator:
                         return placed.robot_name
             return None
 
+    def robot_ready(self, robot_name: str) -> bool:
+        """Whether ``robot_name`` is checked in, ready, idle, and has a region to
+        draw in — i.e. a drawing pinned to it could be staged right now. Used by the
+        admin test-draw flow to fail fast rather than queue a job for a bot that
+        can't take it."""
+        with self._lock:
+            record = self._robots.get(robot_name)
+            return (
+                record is not None
+                and record.status == "ready"
+                and record.staged is None
+                and self._store.region_for_robot(robot_name) is not None
+            )
+
     def color_for_robot(self, robot_name: str) -> str:
         region = self._store.region_for_robot(robot_name)
         color = region.color if region is not None else "#FF0000"
@@ -884,6 +966,11 @@ class _Coordinator:
                 and r.staged is None
                 and self._store.region_for_robot(r.name) is not None
             ]
+            # A pinned job (admin test-draw) may only land on its target bot — never
+            # rerouted to another ready bot. If that bot isn't among the candidates
+            # (not ready, mid-draw, or regionless) the job simply stays queued.
+            if qj.job.robotName is not None:
+                candidates = [r for r in candidates if r.name == qj.job.robotName]
             candidates.sort(key=self._score, reverse=True)
 
             for bot in candidates:
@@ -1169,12 +1256,17 @@ def enqueue_drawing(
     commands: list[DrawingCommand],
     exit_pose: Optional[Pose] = None,
     source_filename: Optional[str] = None,
+    robot_name: Optional[str] = None,
 ) -> DrawingJob:
     """Queue a vectorized drawing for placement on the next-best ready bot.
 
     Intended to be called from the approval flow once a combined sketch has been
     vectorized into drawing commands. Where the drawing physically lands (region,
     rotation, offset) is decided by the placement search at assignment time.
+
+    ``robot_name`` pins the job to one specific bot (admin test-draw); the drawing
+    is then only ever placed on that bot, never rerouted. Omit it for the normal
+    next-best-ready-bot selection.
     """
 
     job = DrawingJob(
@@ -1182,6 +1274,7 @@ def enqueue_drawing(
         commands=commands,
         exitPose=exit_pose or None,
         sourceFilename=source_filename,
+        robotName=robot_name,
     )
     coordinator.enqueue(job)
     print(f"[robots] queued {job.jobId} ({len(commands)} commands)")

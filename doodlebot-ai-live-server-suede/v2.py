@@ -34,6 +34,7 @@ Admin routes (gated by ``require_admin``; a separate admin front-end drives them
   POST /admin/vectorization    -> choose a vectorization's final commands
   GET  /admin/sessions         -> the active session tokens
   POST /admin/sessions         -> replace the active session tokens
+  POST /admin/test-draw        -> make a robot draw a canned calibration shape
 
 DESIGN NOTE (admin as resource locators): like ``ClientSSEPayload``'s ids, the
 ``sketch_id`` and ``vectorization_id`` the admin stream hands out are opaque
@@ -73,7 +74,14 @@ from .arc_line_vectorization_suede.visualize import (
 )
 from .combine import Combine
 from .common import SuccessResponse, require_admin
-from .robots import DrawingCommand, coordinator, enqueue_drawing, parse_commands
+from .robots import (
+    DrawingCommand,
+    TestShape,
+    build_test_shape,
+    coordinator,
+    enqueue_drawing,
+    parse_commands,
+)
 from .storage import StoredResource, storage
 from .vectorize import run_vectorization
 
@@ -301,6 +309,26 @@ class Admin:
             endpoints: GET returns the current set, POST replaces it wholesale."""
 
             sessions: list[str]
+
+    class TestDraw:
+        class Request(BaseModel):
+            """Ask a robot to draw a canned calibration shape, bypassing the
+            sketch→combine→vectorize pipeline — for confirming a newly-online bot
+            can render a vectorization."""
+
+            shape: TestShape
+            robot: str | None = None
+            """Pin the drawing to this specific bot, which must be ready (else the
+            request fails and is never rerouted). Omit to use the normal placement
+            search over every ready bot."""
+
+        class Response(BaseModel):
+            job_id: str
+            shape: TestShape
+            robot: str | None = None
+            """The bot the drawing landed on, if one claimed it synchronously.
+            None means it's queued for the next fitting ready bot (only possible on
+            the unpinned path — a pinned job is checked ready before enqueue)."""
 
 
 # Resolve the forward reference to the (nested) SubmitterStats now that Admin
@@ -1456,3 +1484,32 @@ async def admin_set_sessions(
     require_admin(request)
     manager.set_active_sessions(payload.sessions)
     return Admin.Sessions.Config(sessions=manager.get_active_sessions())
+
+
+@router.post("/admin/test-draw", response_model=Admin.TestDraw.Response)
+async def admin_test_draw(
+    request: Request, payload: Admin.TestDraw.Request
+) -> "Admin.TestDraw.Response":
+    """Make a robot draw a canned calibration shape, to check a newly-online bot can
+    render a vectorization without running a real sketch through the whole pipeline.
+
+    With ``robot`` set, the drawing is pinned to that bot: it must be ready or the
+    request fails with 409, and it's never rerouted to a different bot. Without it,
+    the normal placement search picks the next-best ready bot. Either way the shape
+    is scaled to the target region's footprint at placement time."""
+    require_admin(request)
+    if payload.robot is not None and not coordinator.robot_ready(payload.robot):
+        raise HTTPException(
+            status_code=409, detail=f"robot '{payload.robot}' is not ready"
+        )
+    commands = build_test_shape(payload.shape)
+    # enqueue runs the placement search (blocking) — hop off the event loop, as the
+    # real vectorization dispatch does.
+    job = await asyncio.to_thread(
+        enqueue_drawing, commands, None, f"test-{payload.shape}", payload.robot
+    )
+    return Admin.TestDraw.Response(
+        job_id=job.jobId,
+        shape=payload.shape,
+        robot=coordinator.assigned_robot(job.jobId),
+    )
