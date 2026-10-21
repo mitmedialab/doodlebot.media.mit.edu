@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# .suede/core/clean — ships INSIDE a suede dependency:
+#     <repo>/<dependency>/.suede/core/clean
+#
+# `git subrepo clean` for THIS dependency, from any working directory:
+#     bash <dependency>/.suede/core/clean            # branch + scratch worktree
+#     bash <dependency>/.suede/core/clean --force    # and the fetched refs too
+#
+# Reach for it when a `sync` or `upstream` stopped part way: git-subrepo leaves
+# a `subrepo/<path>` branch and a worktree under .git/tmp/subrepo/ behind, and
+# either can make the next pull or push refuse to start. Cleaning deletes only
+# that bookkeeping - never your files, never your commits.
+#
+# Like `sync` and `upstream` it takes no target and resolves symlinks to the
+# real folder first, so running it through the declaring symlink or an edge
+# cleans the right subrepo. Anything you pass goes to `git subrepo clean`.
+#
+# Afterwards it removes this dependency's scratch directory under
+# .git/tmp/subrepo/ if git-subrepo left it, and prunes stale worktrees.
+
+set -euo pipefail
+
+usage() { grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'; exit 0; }
+[[ "${1-}" == "-h" || "${1-}" == "--help" ]] && usage
+
+die() { printf 'clean: %s\n' "$*" >&2; exit 1; }
+
+command -v git >/dev/null 2>&1 || die "git not found"
+
+# git-subrepo is a git subcommand found on PATH, but an environment can have it
+# installed without it being reachable - a devcontainer feature or a login
+# shell profile that a non-interactive script never sourced. GIT_SUBREPO_ROOT
+# is the marker those installs leave behind, and its `.rc` is what puts the
+# command in scope.
+ensure_git_subrepo() {
+  git subrepo --version >/dev/null 2>&1 && return 0
+  [[ -n "${GIT_SUBREPO_ROOT-}" && -f "${GIT_SUBREPO_ROOT-}/.rc" ]] || return 1
+  set +eu
+  # shellcheck disable=SC1091
+  source "$GIT_SUBREPO_ROOT/.rc"
+  set -eu
+  git subrepo --version >/dev/null 2>&1
+}
+
+ensure_git_subrepo \
+  || die "git-subrepo is not installed (https://github.com/ingydotnet/git-subrepo)"
+
+# Physical paths: reached through a symlink, the real folder is the subrepo.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P)" \
+  || die "cannot resolve script location"
+DEP_DIR="$(cd "$SELF_DIR/../.." >/dev/null 2>&1 && pwd -P)" \
+  || die "cannot resolve dependency root above $SELF_DIR"
+[[ -f "$DEP_DIR/.gitrepo" ]] \
+  || die "no .gitrepo at $DEP_DIR - is this inside an installed suede dependency?"
+
+ROOT="$(cd "$DEP_DIR" && git rev-parse --show-toplevel 2>/dev/null)" \
+  || die "$DEP_DIR is not inside a git repository"
+ROOT="$(cd "$ROOT" && pwd -P)"
+[[ "$DEP_DIR" != "$ROOT" ]] \
+  || die "the dependency must live inside the repo, not at its root"
+
+cd "$ROOT"
+SUBDIR="${DEP_DIR#"$ROOT"/}"
+git subrepo clean "$SUBDIR" "$@"
+
+# git-subrepo looks its worktree up by an encoded path and can miss it (a path
+# segment starting with a dot is the known case), leaving the directory behind
+# where the next pull wants to create one.
+SCRATCH="$(git rev-parse --git-path "tmp/subrepo/$SUBDIR")"
+if [[ -d "$SCRATCH" ]]; then
+  rm -rf "$SCRATCH"
+  printf 'clean: removed the scratch directory %s\n' "$SCRATCH" >&2
+fi
+git worktree prune >/dev/null 2>&1 || true

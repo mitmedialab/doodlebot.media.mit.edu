@@ -2,3 +2,6 @@ pending
 sketches
 combined
 presets.json
+# Left by `pip install -e ./release` (see pyproject.toml)
+*.egg-info/
+build/

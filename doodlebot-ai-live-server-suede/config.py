@@ -36,6 +36,7 @@ class ModelInfo(TypedDict):
 MODELS: dict[str, ModelInfo] = {
     "gpt-image-1": {"label": "GPT Image 1", "provider": "openai"},
     "gpt-image-2": {"label": "GPT Image 2", "provider": "openai"},
+    "gpt-image-2.5-sunburst": {"label": "GPT Image 2.5 Sunburst", "provider": "openai"},
     "gemini-2.5-flash-image": {"label": "Nano Banana Flash", "provider": "gemini"},
     "gemini-3.1-flash-image-preview": {"label": "Nano Banana 2", "provider": "gemini"},
     "gemini-3-pro-image-preview": {"label": "Nano Banana Pro", "provider": "gemini"},

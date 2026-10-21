@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# .suede/core/sync — ships INSIDE a suede dependency:
+#     <repo>/<dependency>/.suede/core/sync
+#
+# Running it pulls THIS dependency's latest `release` commits into your repo:
+#     ./<dependency>/.suede/core/sync            (if executable)
+#     bash <dependency>/.suede/core/sync
+#
+# It takes no target - the dependency is the one containing this script, the
+# same way `upstream` works. Anything you do pass is handed to
+# `git subrepo pull`, so `sync --force` and friends behave as git-subrepo
+# documents them.
+#
+# Three things it does that a bare `git subrepo pull` will not:
+#   * runs from the repository root with a root-relative path, so the caller's
+#     cwd does not matter;
+#   * resolves symlinks to the real folder first - `git subrepo pull` on a
+#     symlink path fails outright, and the edge entries between dependencies
+#     are symlinks;
+#   * falls back to the other spelling of the remote (SSH <-> HTTPS) when the
+#     recorded one does not answer, so a dependency installed with an SSH
+#     remote still pulls on a machine with no key. `--https` skips the SSH
+#     attempt entirely, when you know there is no key to find. git-subrepo would record
+#     the fallback in the .gitrepo; sync puts the recorded remote back in the
+#     same commit. Pass your own -r/--remote to skip all of this.
+#
+# `git subrepo pull` also requires a clean working tree, while install does
+# not. If you have just installed, commit before syncing.
+
+set -euo pipefail
+
+usage() { grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'; exit 0; }
+[[ "${1-}" == "-h" || "${1-}" == "--help" ]] && usage
+
+die() { printf 'sync: %s\n' "$*" >&2; exit 1; }
+
+command -v git >/dev/null 2>&1 || die "git not found"
+
+# git-subrepo is a git subcommand found on PATH, but an environment can have it
+# installed without it being reachable - a devcontainer feature or a login
+# shell profile that a non-interactive script never sourced. GIT_SUBREPO_ROOT
+# is the marker those installs leave behind, and its `.rc` is what puts the
+# command in scope.
+ensure_git_subrepo() {
+  git subrepo --version >/dev/null 2>&1 && return 0
+  [[ -n "${GIT_SUBREPO_ROOT-}" && -f "${GIT_SUBREPO_ROOT-}/.rc" ]] || return 1
+  # `.rc` ends by sourcing a completion script written for an interactive
+  # shell, so strictness comes off for the duration and the outcome is checked
+  # rather than trusted.
+  set +eu
+  # shellcheck disable=SC1091
+  source "$GIT_SUBREPO_ROOT/.rc"
+  set -eu
+  git subrepo --version >/dev/null 2>&1
+}
+
+ensure_git_subrepo \
+  || die "git-subrepo is not installed (https://github.com/ingydotnet/git-subrepo)"
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P)" \
+  || die "cannot resolve script location"
+
+# The dependency root is exactly two levels up (<dep>/.suede/core/sync), and
+# `pwd -P` above has already resolved whatever symlink the caller came through.
+DEP_DIR="$(cd "$SELF_DIR/../.." >/dev/null 2>&1 && pwd -P)" \
+  || die "cannot resolve dependency root above $SELF_DIR"
+[[ -f "$DEP_DIR/.gitrepo" ]] \
+  || die "no .gitrepo at $DEP_DIR - is this inside an installed suede dependency?"
+
+ROOT="$(cd "$DEP_DIR" && git rev-parse --show-toplevel 2>/dev/null)" \
+  || die "$DEP_DIR is not inside a git repository"
+ROOT="$(cd "$ROOT" && pwd -P)"
+[[ "$DEP_DIR" != "$ROOT" ]] \
+  || die "the dependency must live inside the repo, not at its root"
+
+# The ways to reach one repository, the recorded one first. An installed
+# dependency records the SSH spelling, because that is the one `upstream` can
+# push through; a machine with no key - a CI runner, a fresh container - reaches
+# the same public repository over HTTPS. So fetch from what is recorded, and
+# fall back to the other spelling. A local path, or an address carrying a port,
+# has one spelling: itself. With --https (HTTPS_ONLY=1) only the HTTPS spelling
+# is tried: you know there is no SSH key here, so do not spend a timeout
+# finding out.
+spellings() { # <url>
+  local url="$1" rest host path
+  case "$url" in
+    https://*|http://*) rest="${url#*://}"; rest="${rest#*@}"; host="${rest%%/*}"; path="${rest#*/}" ;;
+    ssh://*)            rest="${url#ssh://}"; rest="${rest#*@}"; host="${rest%%/*}"; path="${rest#*/}" ;;
+    *@*:*)              rest="${url#*@}"; host="${rest%%:*}"; path="${rest#*:}" ;;
+    *)                  printf '%s\n' "$url"; return 0 ;;
+  esac
+  if [[ -z "$host" || -z "$path" || "$host" == *:* ]]; then printf '%s\n' "$url"; return 0; fi
+  path="${path%/}"; path="${path%.git}"
+  case "$url" in
+    https://*|http://*)
+      printf '%s\n' "$url"
+      [[ "${HTTPS_ONLY:-0}" == 1 ]] || printf 'git@%s:%s.git\n' "$host" "$path" ;;
+    *)
+      [[ "${HTTPS_ONLY:-0}" == 1 ]] || printf '%s\n' "$url"
+      printf 'https://%s/%s.git\n' "$host" "$path" ;;
+  esac
+}
+
+# The probe fails fast and never ask anyone anything: no password prompt,
+# no host-key question, five seconds to connect.
+# Only the probe below: the pull itself is git-subrepo's, with your own config.
+QUICK_SSH="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}"
+
+reachable_remote() { # <url> <branch>
+  local url
+  while IFS= read -r url; do
+    GIT_SSH_COMMAND="$QUICK_SSH" GIT_TERMINAL_PROMPT=0 \
+      git ls-remote --exit-code "$url" "refs/heads/$2" >/dev/null 2>&1 \
+      && { printf '%s\n' "$url"; return 0; }
+  done < <(spellings "$1")
+  return 1
+}
+
+# --https is ours, not git-subrepo's: take it out before forwarding the rest.
+HTTPS_ONLY=0
+PASS=()
+for argument in "$@"; do
+  if [[ "$argument" == --https ]]; then HTTPS_ONLY=1; else PASS+=("$argument"); fi
+done
+set -- ${PASS[@]+"${PASS[@]}"}
+
+OVERRIDE=()
+USER_REMOTE=0
+for argument in "$@"; do
+  case "$argument" in -r|--remote|--remote=*) USER_REMOTE=1 ;; esac
+done
+RECORDED="$(git config -f "$DEP_DIR/.gitrepo" --get subrepo.remote 2>/dev/null || true)"
+BRANCH="$(git config -f "$DEP_DIR/.gitrepo" --get subrepo.branch 2>/dev/null || true)"
+if [[ "$USER_REMOTE" == 0 && -n "$RECORDED" ]]; then
+  if REACHED="$(reachable_remote "$RECORDED" "${BRANCH:-release}")"; then
+    if [[ "$REACHED" != "$RECORDED" ]]; then
+      if [[ "$HTTPS_ONLY" == 1 ]]; then
+        printf 'sync: --https: pulling over %s (the .gitrepo keeps %s)\n' "$REACHED" "$RECORDED" >&2
+      else
+        printf 'sync: %s did not answer; pulling over %s (the .gitrepo keeps %s)\n' \
+          "$RECORDED" "$REACHED" "$RECORDED" >&2
+      fi
+      OVERRIDE=(--remote="$REACHED")
+    fi
+  fi
+  # Neither answered: let git-subrepo try the recorded one and report it.
+fi
+
+cd "$ROOT"
+SUBDIR="${DEP_DIR#"$ROOT"/}"
+BEFORE="$(git rev-parse HEAD)"
+STATUS=0
+git subrepo pull ${OVERRIDE[@]+"${OVERRIDE[@]}"} "$SUBDIR" "$@" || STATUS=$?
+
+# git-subrepo writes whatever remote it pulled from into the .gitrepo, -u or
+# not. Put the recorded one back: it is the SSH spelling `upstream` pushes
+# through, and the HTTPS fallback was only ever for this one pull.
+if [[ ${#OVERRIDE[@]} -gt 0 && "$(git rev-parse HEAD)" != "$BEFORE" \
+      && "$(git config -f "$SUBDIR/.gitrepo" --get subrepo.remote 2>/dev/null)" != "$RECORDED" ]]; then
+  git config -f "$SUBDIR/.gitrepo" subrepo.remote "$RECORDED"
+  git add "$SUBDIR/.gitrepo"
+  git commit --quiet --amend --no-edit
+fi
+exit "$STATUS"

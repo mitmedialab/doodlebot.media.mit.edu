@@ -9,3 +9,5 @@ pending/
 sketches/
 combined/
 presets.json
+*.egg-info/
+build/

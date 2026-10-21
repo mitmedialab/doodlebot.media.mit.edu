@@ -71,7 +71,7 @@ router = APIRouter()
 # Shared geometry + drawing-command wire types
 #
 # The drawing commands mirror the discriminated union produced by the
-# vectorizer (`arc_line_vectorization_suede.commands.DrawingCommand`) and the
+# vectorizer (`arcline_vectorize`, typed in `svg.DrawingCommand`) and the
 # bot's TypeScript renderer.
 # --------------------------------------------------------------------------- #
 

@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# .suede/core/diff — ships INSIDE a suede dependency:
+#     <repo>/<dependency>/.suede/core/diff
+#
+# What your copy of this dependency differs from, in either direction:
+#
+#     bash <dependency>/.suede/core/diff                # what you would propose
+#     bash <dependency>/.suede/core/diff --sync         # what you would receive
+#     bash <dependency>/.suede/core/diff --at <commit>  # against some other commit
+#
+# Default: the commit this dependency's `.gitrepo` names on the left, your
+# working tree on the right - so `+` lines are yours, and what you are looking
+# at is what `upstream` would propose.
+#
+# --sync: your working tree on the left, the current tip of the remote's
+# release branch on the right - so `+` lines are incoming, and what you are
+# looking at is what `sync` would bring you.
+#
+# --at <commit>: that commit on the left instead of the pinned one. This is
+# how you compare what you have against what another dependency asks for -
+# `deps.sh` prints the exact command when it finds such a case.
+#
+# --https: reach the remote over HTTPS only, skipping the SSH attempt. For a
+# machine you know has no SSH key - a CI runner, a fresh container - where the
+# SSH attempt would only cost a timeout before the fallback.
+#
+# --in <dir>: act on the dependency at <dir> instead of the one containing
+# this script. Everything else that ships in .suede/core takes no target; this
+# flag exists so `deps.sh` and the publish guard can reuse one copy of the
+# script for every dependency in a tree.
+#
+# Anything else you pass goes to `git diff`, so `--stat`, `--name-only`,
+# `--quiet`, `-w` and the rest work as usual.
+#
+# Your side is the files as they are on disk - uncommitted edits and new files
+# included, and whatever your .gitignore excludes left out. `.gitrepo` is
+# dropped from both sides: it is local bookkeeping and always differs.
+#
+# Needs `git` and network access to the dependency's remote. The recorded
+# remote is tried first and its other spelling (SSH <-> HTTPS) second, so a
+# dependency installed with an SSH remote still compares on a machine with no
+# key. git-subrepo is not required.
+#
+# Exit: 0 no difference, 1 there is one (as `git diff` reports it), 2 the
+# command could not run at all.
+
+set -euo pipefail
+
+usage() { grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'; exit 0; }
+
+# 2, not 1: 1 is `git diff`'s "there is a difference", which is an answer
+# rather than a failure, and a caller has to be able to tell them apart.
+die() { printf 'diff: %s\n' "$*" >&2; exit 2; }
+note() { printf 'diff: %s\n' "$*" >&2; }
+
+SYNC=0
+HTTPS_ONLY=0
+AT=""
+IN=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage ;;
+    --sync)    SYNC=1; shift ;;
+    --at)      [[ -n "${2-}" ]] || die "--at needs a commit"; AT="$2"; shift 2 ;;
+    --in)      [[ -n "${2-}" ]] || die "--in needs a directory"; IN="$2"; shift 2 ;;
+    --https)   HTTPS_ONLY=1; shift ;;
+    # The two sides are ours to name, so a `--` of yours would only collide
+    # with the one below. Dropping it lets `diff -- --stat` mean what it looks
+    # like it means.
+    --)        shift ;;
+    *)         ARGS+=("$1"); shift ;;
+  esac
+done
+[[ "$SYNC" == 1 && -n "$AT" ]] && die "--sync and --at name two different right-hand sides; pick one"
+
+command -v git >/dev/null 2>&1 || die "git not found"
+
+if [[ -n "$IN" ]]; then
+  DEP_DIR="$(cd "$IN" >/dev/null 2>&1 && pwd -P)" || die "no such directory: $IN"
+else
+  SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P)" \
+    || die "cannot resolve script location"
+  # The dependency root is exactly two levels up (<dep>/.suede/core/diff), and
+  # `pwd -P` above has already resolved whatever symlink the caller came through.
+  DEP_DIR="$(cd "$SELF_DIR/../.." >/dev/null 2>&1 && pwd -P)" \
+    || die "cannot resolve dependency root above $SELF_DIR"
+fi
+[[ -f "$DEP_DIR/.gitrepo" ]] \
+  || die "no .gitrepo at $DEP_DIR - is this inside an installed suede dependency?"
+
+git -C "$DEP_DIR" rev-parse --show-toplevel >/dev/null 2>&1 \
+  || die "$DEP_DIR is not inside a git repository"
+
+field() { git config -f "$DEP_DIR/.gitrepo" --get "subrepo.$1" 2>/dev/null || true; }
+REMOTE="$(field remote)"
+COMMIT="$(field commit)"
+BRANCH="$(field branch)"
+BRANCH="${BRANCH:-release}"
+[[ -n "$REMOTE" ]] || die "$DEP_DIR/.gitrepo names no remote"
+[[ -n "$COMMIT" || "$SYNC" == 1 || -n "$AT" ]] || die "$DEP_DIR/.gitrepo names no commit"
+
+WORKSPACE="$(mktemp -d)"
+trap 'rm -rf "$WORKSPACE"' EXIT
+
+# Your side, built from what git can see rather than from the directory: that
+# is what keeps build output and other ignored files out of a diff meant to
+# show what you would propose, while still including edits you have not
+# committed and files you have only just added.
+copy_working_tree() { # <destination>
+  local destination="$1" file
+  while IFS= read -r -d '' file; do
+    [[ "$file" == ".gitrepo" ]] && continue
+    mkdir -p "$destination/$(dirname "$file")"
+    cp -pP "$DEP_DIR/$file" "$destination/$file"
+  done < <(git -C "$DEP_DIR" ls-files -z --cached --others --exclude-standard)
+}
+
+# The ways to reach one repository, the recorded one first. An installed
+# dependency records the SSH spelling, because that is the one `upstream` can
+# push through; a machine with no key - a CI runner, a fresh container - reaches
+# the same public repository over HTTPS. So fetch from what is recorded, and
+# fall back to the other spelling. A local path, or an address carrying a port,
+# has one spelling: itself. With --https (HTTPS_ONLY=1) only the HTTPS spelling
+# is tried: you know there is no SSH key here, so do not spend a timeout
+# finding out.
+spellings() { # <url>
+  local url="$1" rest host path
+  case "$url" in
+    https://*|http://*) rest="${url#*://}"; rest="${rest#*@}"; host="${rest%%/*}"; path="${rest#*/}" ;;
+    ssh://*)            rest="${url#ssh://}"; rest="${rest#*@}"; host="${rest%%/*}"; path="${rest#*/}" ;;
+    *@*:*)              rest="${url#*@}"; host="${rest%%:*}"; path="${rest#*:}" ;;
+    *)                  printf '%s\n' "$url"; return 0 ;;
+  esac
+  if [[ -z "$host" || -z "$path" || "$host" == *:* ]]; then printf '%s\n' "$url"; return 0; fi
+  path="${path%/}"; path="${path%.git}"
+  case "$url" in
+    https://*|http://*)
+      printf '%s\n' "$url"
+      [[ "${HTTPS_ONLY:-0}" == 1 ]] || printf 'git@%s:%s.git\n' "$host" "$path" ;;
+    *)
+      [[ "${HTTPS_ONLY:-0}" == 1 ]] || printf '%s\n' "$url"
+      printf 'https://%s/%s.git\n' "$host" "$path" ;;
+  esac
+}
+
+# Our own fetches fail fast and never ask anyone anything: no password prompt,
+# no host-key question, five seconds to connect.
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}"
+export GIT_TERMINAL_PROMPT=0
+
+# The other side, materialised from the remote. No history is kept - this is
+# the same degit-shaped fetch the installer does, for the same reason: the tree
+# is all anyone needs to compare against. Sets REFERENCE_COMMIT to whatever was
+# checked out, which is the only way to learn the branch tip once `.git` is
+# gone.
+REFERENCE_COMMIT=""
+fetch_reference() { # <destination> <commit-or-empty-for-branch-tip>
+  local destination="$1" commit="$2" url tried="" reached=""
+  git init --quiet "$destination"
+  while IFS= read -r url; do
+    tried+="${tried:+, }$url"
+    git -C "$destination" remote remove origin 2>/dev/null || true
+    git -C "$destination" remote add origin "$url"
+    if [[ -z "$commit" ]]; then
+      git -C "$destination" fetch --quiet --depth 1 origin "refs/heads/$BRANCH" 2>/dev/null || continue
+    else
+      # Fetching a bare SHA is refused by some servers; the branch always works.
+      git -C "$destination" fetch --quiet --depth 1 origin "$commit" 2>/dev/null \
+        || git -C "$destination" fetch --quiet origin "refs/heads/$BRANCH" 2>/dev/null \
+        || continue
+    fi
+    reached="$url"; break
+  done < <(spellings "$REMOTE")
+  [[ -n "$reached" ]] || die "could not reach $REMOTE ($BRANCH); tried: $tried"
+  if [[ -z "$commit" ]]; then
+    git -C "$destination" checkout --quiet --detach FETCH_HEAD
+  else
+    git -C "$destination" checkout --quiet --detach "$commit" 2>/dev/null \
+      || die "$reached has no commit $commit on $BRANCH"
+  fi
+  REFERENCE_COMMIT="$(git -C "$destination" rev-parse HEAD)"
+  rm -rf "$destination/.git" "$destination/.gitrepo"
+}
+
+if [[ "$SYNC" == 1 ]]; then
+  fetch_reference "$WORKSPACE/remote" ""
+  LEFT="local"; RIGHT="remote"
+  # A sync merges rather than overwrites, so spell out which half of the diff
+  # is the incoming change and which half is simply yours. Both are worth
+  # seeing before pulling; confusing them is what makes a pull a surprise.
+  if [[ "$REFERENCE_COMMIT" == "$COMMIT" ]]; then
+    note "already pinned at the tip of $BRANCH (${REFERENCE_COMMIT:0:7}) - a sync would bring nothing, so all of this is yours"
+  else
+    note "pinned ${COMMIT:0:7} -> tip of $BRANCH ${REFERENCE_COMMIT:0:7}"
+    note "+ is what the tip has and you do not (incoming); - is what you have and it does not (yours, which a sync keeps)"
+  fi
+elif [[ -n "$AT" ]]; then
+  fetch_reference "$WORKSPACE/pinned" "$AT"
+  LEFT="pinned"; RIGHT="local"
+  if [[ "$REFERENCE_COMMIT" == "$COMMIT" ]]; then
+    note "against ${REFERENCE_COMMIT:0:7}, which is also your pin - + is yours"
+  else
+    note "against ${REFERENCE_COMMIT:0:7} (your pin is ${COMMIT:0:7}) - + is what you have that it does not"
+  fi
+else
+  fetch_reference "$WORKSPACE/pinned" "$COMMIT"
+  LEFT="pinned"; RIGHT="local"
+  note "against pinned ${COMMIT:0:7} on $BRANCH - + is yours, and is what \`upstream\` would propose"
+fi
+copy_working_tree "$WORKSPACE/local"
+
+STATUS=0
+( cd "$WORKSPACE" && git diff --no-index ${ARGS[@]+"${ARGS[@]}"} -- "$LEFT" "$RIGHT" ) || STATUS=$?
+# `git diff` says nothing when there is nothing to say, which for a command you
+# ran to find out reads the same as a command that failed to look.
+[[ "$STATUS" == 0 ]] && note "no differences"
+exit "$STATUS"

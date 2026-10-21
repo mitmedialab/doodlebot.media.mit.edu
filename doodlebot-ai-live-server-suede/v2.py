@@ -9,13 +9,17 @@ server's fakery with the real pipeline:
     via presigned-URL redirects; only per-sketch meta JSON stays on local disk;
   * every submitted sketch is held for a **human admin** to approve before it can
     group — this is the moderation gate that keeps inappropriate drawings out;
-  * approved sketches are grouped into trios *incrementally* — a submitter is
-    told about each companion the moment it appears, rather than waiting for the
-    whole trio to complete;
-  * a completed trio is combined into a single drawing by GPT Image 1 and that
+  * approved sketches are grouped into per-session trios *incrementally* — a
+    submitter is told about each companion the moment it appears, rather than
+    waiting for the whole trio to complete; a pair left waiting longer than
+    TRIO_FILL_AFTER is topped up with a random earlier sketch from its session;
+  * a completed trio is combined into a single drawing by COMBINE_MODEL and that
     result is vectorized into robot-drawable strokes; that vectorization is then
     held for the **admin** to approve (and optionally simplify) before it is
-    served back to every member of the trio and dispatched to a robot.
+    served back to every member of the trio and dispatched to a robot;
+  * sessions named with AUTO_SESSION_PREFIX skip the admin entirely: sketches
+    are approved on submission and the vectorization with the fewest commands
+    is chosen automatically.
 
 Routes (the client-facing four match the test server), exported on ``router`` and
 mounted by release/app.py alongside the existing v1 routes:
@@ -68,10 +72,7 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel
 
-from .arc_line_vectorization_suede.visualize import (
-    commands_to_svg,
-    DrawingCommand as VectorDrawingCommand,
-)
+from .svg import commands_to_svg, DrawingCommand as VectorDrawingCommand
 from .combine import Combine
 from .common import SuccessResponse, require_admin
 from .robots import (
@@ -95,7 +96,7 @@ TRIO_SIZE = 3
 # Admin.Vectorization.SSEPayload.command_options — bump both together if changed.
 VECTORIZATION_OPTIONS = 2
 
-# Cap on how many combine (GPT Image 1) calls may be in flight at once, across
+# Cap on how many combine (COMBINE_MODEL) calls may be in flight at once, across
 # every trio. OpenAI enforces per-minute rate limits (RPM / images-per-minute,
 # tiered by usage) rather than a hard concurrency cap; a global gate keeps bursts
 # under those limits, and the retry-with-backoff below absorbs the occasional 429
@@ -114,24 +115,44 @@ COMBINE_MAX_RETRIES = int(os.environ.get("V2_COMBINE_MAX_RETRIES", "5"))
 COMBINE_BACKOFF_BASE = float(os.environ.get("V2_COMBINE_BACKOFF_BASE", "1.0"))
 COMBINE_BACKOFF_MAX = float(os.environ.get("V2_COMBINE_BACKOFF_MAX", "30.0"))
 
+# How long (seconds) the first member of a partially-formed trio may wait before
+# the trio is topped up with a randomly-chosen, previously-approved sketch from
+# the same session, so a quiet session doesn't leave a pair waiting forever.
+# Only applies once the group has at least two real members, and only if the
+# session already has an approved sketch to borrow (see Manager._fill_stale_group).
+TRIO_FILL_AFTER = float(os.environ.get("V2_TRIO_FILL_AFTER", "30.0"))
+
+# Sessions whose token starts with this prefix run without a curator: every
+# sketch is approved on submission, and of the VECTORIZATION_OPTIONS produced per
+# trio the one with the fewest drawing commands is chosen automatically. The
+# session must still be active (see /admin/sessions). Empty disables auto mode.
+AUTO_SESSION_PREFIX = os.environ.get("V2_AUTO_SESSION_PREFIX", "auto")
+
 # The image model + prompt used to combine a trio into one drawing.
-COMBINE_MODEL = "gpt-image-1"
+COMBINE_MODEL = "gpt-image-2.5-sunburst"
 COMBINE_PROMPT = """\
-doodle creatively combining all sketches into one, adding elements where the \
-flow needs it, use words as inspiration, no words or letters in the drawing. \
-Use simple arcs and straight lines to make the doodle.
-Pure white background, thin clean black lines only, no fill, no shading, no \
-color, no hatching. Style: sparse contour drawing, like a zen brushstroke \
-illustration.
-Keep the drawing as minimal as possible. Minimal and less clear is better \
-than complicated.
-Your doodle will be drawn by a wheeled drawing robot that is only able to \
-draw circular arcs and lines. 
-Circular arcs are preferred, since they only require a single command, \
-while a line effectively requires two commands (one command to spin in place to orient \
-and then the actual line to draw).
-Limit your final drawing to 20 or less shapes (individual lines + arcs) to allow for extra fast drawing.
-"""
+Create an imaginative, evocative doodle on a clean white background using simple, continuous black strokes. Draw inspiration from the three provided seed doodles, incorporating or reinterpreting their visual elements in unexpected and creative ways.
+
+You have complete creative freedom to move beyond the original subjects. Rather than simply combining the three drawings, consider inventing an entirely new subject, scene, creature, or abstract composition, subtly weaving elements from the seeds into the larger design.
+
+Aim for a whimsical, charming, and expressive result that feels like a thoughtfully designed piece of minimalist line art. Favor **clean, smooth, flowing lines, graceful curves, elegant simplicity, and an open composition with plenty of negative space.** The drawing can be polished and precise rather than deliberately imperfect or sketchy. Its charm should come from the creativity and expressiveness of the forms, not from irregular or wobbly strokes.
+
+**Drawing constraints (essential for robotic pen plotting):**
+
+- Use **at most 6 separate pen strokes** across the entire drawing. Prefer long, continuous strokes that flow through multiple elements without lifting the pen.
+- Every stroke should consist of large, smooth curves or straight lines. Avoid sharp turns, zigzags, wiggles, tiny marks, and intricate details.
+- Spirals should complete no more than one turn.
+- If depicting a face, use at most 3 short strokes for its features, counted within the 6-stroke limit.
+- No individual detail or feature should be smaller than **one-tenth of the drawing's total width**.
+- Avoid dense overlapping lines, excessive spirals, and tightly packed shapes. Favor broad gestures and open, spacious forms.
+- Use **consistent black line weight**, with smooth, deliberate contours. Avoid artificial roughness, shaky lines, sketch textures, or decorative imperfections.
+- Ensure that each stroke follows a natural, continuous path that a physical pen could realistically trace without lifting, retracing, or making abrupt directional changes.
+
+The final drawing should feel cohesive, intentional, and visually refined, balancing simplicity with imagination. Prioritize **visual poetry, originality, and emotional character** over literal representation of the seed doodles.
+
+Think of the drawing as a piece of elegant minimalist continuous-line art created by a tabletop drawing robot: **a handful of beautifully composed, fluid gestures that suggest something much richer than the lines themselves.**
+
+The goal is not to imitate the roughness of a child's drawing, but to preserve its **playfulness, spontaneity, and imaginative freedom** while achieving the clean execution of a skilled line artist."""
 
 # Robot dispatch: after vectorization, the drawing is enqueued for a real
 # Doodlebot (see release/robots.py). The client sits in "robot-selection" until
@@ -419,30 +440,61 @@ class Client:
 
 @dataclass
 class _Group:
-    """A trio being assembled incrementally out of approved sketches.
+    """A trio being assembled incrementally out of one session's approved sketches.
 
     Unlike the test server (which batched three at once), members join one at a
     time. Each join tells the newcomer about everyone already inside, and tells
     everyone already inside about the newcomer — so every member's companion
-    list grows to its final size as the trio fills."""
+    list grows to its final size as the trio fills.
+
+    A trio may also be completed with *fillers*: previously-approved sketches
+    from the same session, borrowed when the members have waited too long (see
+    Manager._fill_stale_group). Fillers are combined like any member and show up
+    in the members' companion lists, but they are never notified or advanced —
+    their own pipeline already ran."""
 
     manager: "Manager"
+    session: str
     members: list[str] = field(default_factory=list)
+    fillers: list[str] = field(default_factory=list)
+    # time.monotonic() when the first member joined; drives TRIO_FILL_AFTER.
+    started: float | None = None
+
+    @property
+    def trio_ids(self) -> list[str]:
+        return self.members + self.fillers
+
+    @property
+    def full(self) -> bool:
+        return len(self.trio_ids) >= TRIO_SIZE
 
     def admit(self, sketch: Sketch) -> bool:
         """Add ``sketch`` and re-broadcast companion lists. Returns True when the
         trio is now full and should be handed to the combine pipeline."""
+        if self.started is None:
+            self.started = time.monotonic()
         self.members.append(sketch.id)
-        full = len(self.members) >= TRIO_SIZE
+        self._announce()
+        return self.full
+
+    def fill(self, sketch_ids: list[str]) -> bool:
+        """Top the trio up with borrowed ``sketch_ids`` and re-broadcast companion
+        lists to the real members. Returns True when the trio is now full."""
+        self.fillers.extend(sketch_ids)
+        self._announce()
+        return self.full
+
+    def _announce(self) -> None:
+        full = self.full
+        trio = self.trio_ids
         for member_id in self.members:
             member = self.manager.sketches[member_id]
-            companions = [other for other in self.members if other != member_id]
+            companions = [other for other in trio if other != member_id]
             # A full companion list means the trio is complete → start combining.
             member.state = "combining" if full else "approved"
             self.manager._emit(
                 member, ClientSSEPayload(sketch=member_id, companions=companions)
             )
-        return full
 
 
 @dataclass
@@ -452,10 +504,15 @@ class _PendingVectorization:
     Held out of every client's feed until the admin picks a drawing — the admin
     reviews two independently-combined ``command_options`` (against the source
     trio) and returns the chosen, possibly-trimmed list. ``id`` is the stable
-    resource locator the served SVG is stored under once chosen."""
+    resource locator the served SVG is stored under once chosen.
+
+    ``trio_ids`` is every sketch the drawing was combined from (shown to the
+    admin); ``member_ids`` is the subset whose clients are waiting on it — i.e.
+    excluding any fillers borrowed from earlier trios."""
 
     id: str
     trio_ids: list[str]
+    member_ids: list[str]
     command_options: list[list[DrawingCommand]]
 
 
@@ -478,9 +535,10 @@ class Manager:
         # Cache of minted presigned URLs: resource_id -> (url, created_monotonic).
         # See resource_redirect() for the refresh/expiry policy.
         self._presigned: dict[str, tuple[str, float]] = {}
-        # The single trio currently being assembled. A new one is started as
-        # soon as the previous one fills.
-        self._forming = _Group(self)
+        # The trio currently being assembled for each session (sketches from
+        # different sessions never mix). A new one is started as soon as the
+        # previous one fills. See _forming_group.
+        self._forming: dict[str, _Group] = {}
         # Keep strong references to background tasks so they aren't GC'd.
         self._tasks: set[asyncio.Task[None]] = set()
         # Process-wide gate bounding concurrent OpenAI combine calls. Built lazily
@@ -792,7 +850,12 @@ class Manager:
         # submission already created it eagerly and treats this as a no-op; a
         # reconnecting client needs it to rebuild the model.)
         self._emit(sketch, ClientSSEPayload(sketch=sketch_id))
-        self._request_sketch_approval(sketch)
+        if _is_auto_session(session):
+            # No curator for this session: approve on the spot. Never reaches the
+            # admin feed.
+            self._apply_verdict(sketch, "approved")
+        else:
+            self._request_sketch_approval(sketch)
         return SketchResponse(sketch=sketch_id)
 
     def _persist(self, sketch: Sketch) -> None:
@@ -891,39 +954,98 @@ class Manager:
             # leaves the existing verdict/state untouched. (No await runs before
             # the pop above, so concurrent resolves can't both pass it.)
             return
+        self._apply_verdict(sketch, status)
 
+    def _apply_verdict(self, sketch: Sketch, status: SketchStatus) -> None:
+        """Record a verdict (from the admin, or automatic for an auto session) and
+        act on it. Synchronous so admit-to-trio stays atomic on the event loop."""
         # Record the verdict (drives the submitter stats) before anything else.
         sketch.verdict = status
 
         if status != "approved":
             # Terminal. Keep it in "approval-pending" (out of the pool); the client
             # learns the verdict via the status field.
-            self._emit(sketch, ClientSSEPayload(sketch=sketch_id, status=status))
+            self._emit(sketch, ClientSSEPayload(sketch=sketch.id, status=status))
             return
 
         sketch.state = "approved"
-        self._emit(sketch, ClientSSEPayload(sketch=sketch_id, status="approved"))
+        self._emit(sketch, ClientSSEPayload(sketch=sketch.id, status="approved"))
 
         # DESIGN NOTE (incremental grouping): admit the newly-approved sketch to
-        # the forming trio right now. Everyone already waiting learns about it
-        # immediately, and it learns about them — this is the "pair the moment
-        # there's more than one" behaviour the test server flagged as a TODO.
-        if self._forming.admit(sketch):
-            trio = self._forming.members
-            self._forming = _Group(self)
-            self._spawn(self._combine(trio))
+        # its session's forming trio right now. Everyone already waiting learns
+        # about it immediately, and it learns about them — this is the "pair the
+        # moment there's more than one" behaviour the test server flagged as a TODO.
+        group = self._forming_group(sketch.session)
+        if group.admit(sketch):
+            self._launch(group)
+        elif len(group.members) >= 2:
+            # A pair is now waiting: arm the top-up timer (a no-op if the trio
+            # fills naturally first).
+            self._spawn(self._fill_when_stale(group))
+
+    # -- trio formation -----------------------------------------------------
+
+    def _forming_group(self, session: str) -> _Group:
+        group = self._forming.get(session)
+        if group is None:
+            group = self._forming[session] = _Group(self, session)
+        return group
+
+    def _launch(self, group: _Group) -> None:
+        """Retire a full group from formation and start combining it."""
+        if self._forming.get(group.session) is group:
+            del self._forming[group.session]
+        self._spawn(self._combine(group))
+
+    async def _fill_when_stale(self, group: _Group) -> None:
+        """Wait until the group's first member has waited TRIO_FILL_AFTER, then
+        try to top it up."""
+        assert group.started is not None
+        delay = group.started + TRIO_FILL_AFTER - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        self._fill_stale_group(group)
+
+    def _fill_stale_group(self, group: _Group) -> None:
+        """Complete a still-forming group with randomly-chosen sketches already
+        approved in the same session (e.g. members of earlier trios), so its
+        members stop waiting on fresh submissions. If the session has nothing to
+        borrow yet, leave the group alone — the next approval will complete it.
+
+        Synchronous, so the staleness check and the fill are atomic against a
+        concurrent approval joining the same group."""
+        if self._forming.get(group.session) is not group or group.full:
+            return  # already filled naturally (and launched), or superseded
+        in_trio = set(group.trio_ids)
+        candidates = [
+            s.id
+            for s in self.sketches.values()
+            if s.session == group.session
+            and s.verdict == "approved"
+            and s.id not in in_trio
+            and s.id in self.resources
+        ]
+        if not candidates:
+            return
+        needed = TRIO_SIZE - len(group.trio_ids)
+        borrowed = random.sample(candidates, min(needed, len(candidates)))
+        print(f"[v2] topping up stale trio {group.members} with {borrowed}")
+        if group.fill(borrowed):
+            self._launch(group)
 
     # -- pipeline orchestration --------------------------------------------
 
-    async def _combine(self, trio_ids: list[str]) -> None:
-        """Combine a full trio into VECTORIZATION_OPTIONS independent drawings,
-        vectorize each, then hand both options to the admin to choose from.
-        Nothing reaches the trio's clients here — they stay in "combining" until
-        the admin picks a vectorization."""
+    async def _combine(self, group: _Group) -> None:
+        """Combine a full trio into VECTORIZATION_OPTIONS independent drawings and
+        vectorize each. In a curated session both options go to the admin to
+        choose from, and the trio's clients stay in "combining" until the admin
+        picks; in an auto session the option with the fewest commands is chosen
+        and finalized straight away."""
+        trio_ids = list(group.trio_ids)
         trio_resources = [self.resources[sid] for sid in trio_ids]
 
         try:
-            # Two independent combine+vectorize runs (GPT Image 1 is
+            # Two independent combine+vectorize runs (the image model is
             # non-deterministic, so the same trio yields two distinct options).
             # Run them concurrently; both must succeed to offer a real choice.
             options = await asyncio.gather(
@@ -940,27 +1062,30 @@ class Manager:
             print(f"[v2] combine pipeline failed for {trio_ids}: {exc}")
             return
 
-        self._request_vectorization_approval(trio_ids, list(options))
+        # The locator is a fresh, non-content-addressed id: the served SVG doesn't
+        # exist yet (the commands are still to be chosen), so the id is minted up
+        # front and the blob is filled in under it once chosen.
+        pending = _PendingVectorization(
+            id=uuid.uuid4().hex,
+            trio_ids=trio_ids,
+            member_ids=list(group.members),
+            command_options=list(options),
+        )
+        if _is_auto_session(group.session):
+            await self._finalize_vectorization(
+                pending, min(pending.command_options, key=len)
+            )
+        else:
+            self._request_vectorization_approval(pending)
 
     # -- vectorization choice (admin) --------------------------------------
 
-    def _request_vectorization_approval(
-        self, trio_ids: list[str], command_options: list[list[DrawingCommand]]
-    ) -> None:
+    def _request_vectorization_approval(self, pending: _PendingVectorization) -> None:
         """Park a combined trio's vectorization options for the admin's choice and
-        notify the admin feed with both option sets plus the source trio.
-
-        The locator is a fresh, non-content-addressed id: the served SVG doesn't
-        exist yet (the admin picks + trims the commands), so the id is minted up
-        front and the blob is filled in under it once chosen. The trio stays in
-        "combining" — no ``vectorization`` reaches any client until then."""
-        vectorization_id = uuid.uuid4().hex
-        pending = _PendingVectorization(
-            id=vectorization_id,
-            trio_ids=list(trio_ids),
-            command_options=command_options,
-        )
-        self.pending_vectorizations[vectorization_id] = pending
+        notify the admin feed with both option sets plus the source trio. The trio
+        stays in "combining" — no ``vectorization`` reaches any client until the
+        admin chooses."""
+        self.pending_vectorizations[pending.id] = pending
         self._notify_admin(_vectorization_payload(pending))
 
     def resolve_vectorization(self, req: "Admin.Vectorization.Request") -> None:
@@ -990,9 +1115,9 @@ class Manager:
         self, pending: _PendingVectorization, commands: list[DrawingCommand]
     ) -> None:
         """Render the chosen commands to the served SVG, store it under the
-        vectorization's locator id, reveal it to every trio member, and dispatch
-        the drawing to a robot."""
-        trio = [self.sketches[sid] for sid in pending.trio_ids]
+        vectorization's locator id, reveal it to every trio member (not to the
+        owners of borrowed fillers), and dispatch the drawing to a robot."""
+        trio = [self.sketches[sid] for sid in pending.member_ids]
 
         svg = _render_commands_svg(commands)
         await asyncio.to_thread(
@@ -1063,7 +1188,7 @@ class Manager:
     async def _combine_and_vectorize(
         self, resources: list[StoredResource]
     ) -> list[DrawingCommand]:
-        """Run GPT Image 1 over the trio and vectorize the result into the
+        """Run the combine model over the trio and vectorize the result into the
         low-geometry drawing commands (for admin review + robot dispatch). Retries
         the whole (network + CPU) chain a couple of times before giving up.
 
@@ -1110,7 +1235,7 @@ class Manager:
         return self._combine_gate_sem
 
     async def _combine_call(self, images: list[bytes]) -> str:
-        """Run one GPT Image 1 combine, gated for concurrency and retried with
+        """Run one COMBINE_MODEL combine, gated for concurrency and retried with
         backoff on rate-limit / transient errors. Returns the combined PNG as
         base64.
 
@@ -1266,6 +1391,11 @@ def _render_commands_svg(commands: list[DrawingCommand]) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_auto_session(session: str) -> bool:
+    """Whether ``session`` runs without a curator (see AUTO_SESSION_PREFIX)."""
+    return bool(AUTO_SESSION_PREFIX) and session.startswith(AUTO_SESSION_PREFIX)
 
 
 def _decode_data_url(data_url: str) -> tuple[str, bytes]:

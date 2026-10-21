@@ -182,13 +182,21 @@ representation. `Region.free_fraction` exposes live fill for the admin view.
 
 ## The vectorizer (`vectorize.py`)
 
-`POST /vectorize` accepts an uploaded image and runs
-`arc_line_vectorization_suede.default_pipeline` (a vendored suede subrepo:
-skeletonize → segment → graph → low/high-geometry vectorize → route optimize).
-It returns two command lists — `low_geometry` (consolidated) and `high_geometry`
-— plus a side-by-side comparison `svg`. These `DrawingCommand`s
+`POST /vectorize` accepts an uploaded image and runs it through
+[`arcline_vectorize`](https://github.com/pmalacho-mit/suede.doodlebot-vectorize),
+a Rust (PyO3) port of the original Python `arc_line_vectorization_suede`
+pipeline (skeletonize → segment → graph → low/high-geometry vectorize → route
+optimize). It returns two command lists — `low_geometry` (consolidated) and
+`high_geometry` — plus a side-by-side comparison `svg`. These `DrawingCommand`s
 (`line`/`spin`/`arc`, discriminated union) are exactly what `robots.py` consumes,
 closing the loop from pixels to pen strokes.
+
+The extension isn't on PyPI: `pyproject.toml` pins each platform's prebuilt
+wheel (Linux x86_64/aarch64, macOS) by release URL + sha256, so the Docker build
+needs no Rust toolchain. To upgrade, swap the version + hashes for a newer
+[release](https://github.com/pmalacho-mit/suede.doodlebot-vectorize/releases).
+`svg.py` keeps a pure-Python `commands_to_svg` for re-rendering admin-edited
+commands.
 
 ---
 

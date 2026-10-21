@@ -1,5 +1,10 @@
-from .arc_line_vectorization_suede import default_pipeline, DrawingCommand
-from .arc_line_vectorization_suede.visualize import commands_to_svg, commands_to_svg_compare
+from .svg import DrawingCommand
+
+# Rust port of the arc/line vectorizer (formerly the vendored
+# arc_line_vectorization_suede package). Prebuilt wheels are pinned per
+# platform in pyproject.toml; see
+# https://github.com/pmalacho-mit/suede.doodlebot-vectorize
+import arcline_vectorize
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +15,7 @@ from PIL import Image
 import asyncio
 from functools import wraps
 import io
-from typing import Sequence, TypedDict
+from typing import TypedDict, cast
 
 router = APIRouter()
 
@@ -19,10 +24,15 @@ class VectorizationResult(TypedDict):
     """Return shape of :func:`run_vectorization`.
 
     ``low_geometry`` / ``high_geometry`` are the drawing commands as plain,
-    JSON-able dicts (the vectorizer's ``DrawingCommand`` *TypedDict* form, with
-    numpy scalars unwrapped) — NOT the Pydantic ``DrawingCommand`` models used by
-    ``robots.py``. Callers that dispatch to a robot must parse them into those
-    models first (see ``robots.parse_commands``)."""
+    JSON-able dicts (the vectorizer's ``DrawingCommand`` *TypedDict* form) —
+    NOT the Pydantic ``DrawingCommand`` models used by ``robots.py``. Callers
+    that dispatch to a robot must parse them into those models first (see
+    ``robots.parse_commands``).
+
+    ``svg`` is a side-by-side low/high comparison; ``low_geometry_svg`` renders
+    the low-geometry commands on their own — those are what we actually
+    publish to a robot, so it's what the gallery shows after the eager
+    vectorize completes."""
 
     low_geometry: list[DrawingCommand]
     high_geometry: list[DrawingCommand]
@@ -30,43 +40,31 @@ class VectorizationResult(TypedDict):
     low_geometry_svg: str
 
 
-def _commands_to_jsonable(commands: Sequence[DrawingCommand]) -> list[DrawingCommand]:
-    """Strip numpy scalar wrappers so DrawingCommand dicts serialize cleanly."""
-    out = []
-    for cmd in commands:
-        item = {}
-        for key, value in cmd.items():
-            if isinstance(value, np.bool_):
-                item[key] = bool(value)
-            elif isinstance(value, np.integer):
-                item[key] = int(value)
-            elif isinstance(value, np.floating):
-                item[key] = float(value)
-            else:
-                item[key] = value
-        out.append(item)
-    return out
-
-
 def run_vectorization(image_array: np.ndarray) -> VectorizationResult:
-    _, _, _, _, _, low_geometry_optimized, high_geometry_optimized = default_pipeline(
-        image_array
+    """Vectorize ``np.asarray(pil_image)`` (grayscale, RGB or RGBA, 8-bit).
+
+    The extension takes a row-major RGBA8 buffer. Alpha is only honoured for
+    real RGBA input (composited over white); RGB/grayscale get an opaque alpha
+    channel, matching how the original Python pipeline treated them. The
+    extension releases the GIL, so ``asyncio.to_thread`` runs it in parallel.
+    """
+    arr = np.ascontiguousarray(image_array)
+    if arr.dtype != np.uint8:
+        raise ValueError(f"expected an 8-bit image, got dtype {arr.dtype}")
+    h, w = arr.shape[:2]
+    opaque = np.full((h, w), 255, np.uint8)
+    if arr.ndim == 2:
+        rgba, has_alpha = np.dstack([arr, arr, arr, opaque]), False
+    elif arr.ndim == 3 and arr.shape[2] == 3:
+        rgba, has_alpha = np.dstack([arr, opaque]), False
+    elif arr.ndim == 3 and arr.shape[2] == 4:
+        rgba, has_alpha = arr, True
+    else:
+        raise ValueError(f"unsupported image shape {arr.shape}")
+    return cast(
+        VectorizationResult,
+        arcline_vectorize.vectorize(rgba.tobytes(), w, h, has_alpha),
     )
-    svg = commands_to_svg_compare(
-        low_geometry_optimized.commands,
-        high_geometry_optimized.commands,
-        label_a="low_geometry_optimized.commands",
-        label_b="high_geometry_optimized.commands",
-    )
-    return {
-        "low_geometry": _commands_to_jsonable(low_geometry_optimized.commands),
-        "high_geometry": _commands_to_jsonable(high_geometry_optimized.commands),
-        "svg": svg,
-        # The low-geometry commands are what we actually publish to a robot, so
-        # render them on their own — this is what the gallery shows after the
-        # eager vectorize completes.
-        "low_geometry_svg": commands_to_svg(low_geometry_optimized.commands),
-    }
 
 
 class VectorizationError(Exception):
